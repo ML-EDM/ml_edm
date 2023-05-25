@@ -1,0 +1,130 @@
+import tsfel
+import numpy as np
+from pandas import DataFrame
+from warnings import warn
+
+
+def get_time_series_lengths(X):
+    not_nan_coordinates = np.nonzero(np.logical_not(np.isnan(X)))
+    not_nan_count_per_row = np.unique(not_nan_coordinates[0], return_counts=True)[1]
+    not_nan_indices_per_row = np.split(not_nan_coordinates[1], np.cumsum(not_nan_count_per_row)[:-1])
+    return np.array([np.max(array) + 1 for array in not_nan_indices_per_row])
+
+def extract_features(X):
+    # TODO: limits : no nan in array, doesnt work when t < 12
+    # Convert input to numpy array of shape (N, T), N number of time series, T their max_size with nan padding.
+
+    if isinstance(X, list):
+        max_series_length = np.max([len(time_series) for time_series in X])
+        padding = np.full((len(X), max_series_length), np.nan)
+        for i, time_series in enumerate(X):
+            padding[i, :len(time_series)] = time_series
+        X = padding
+    elif isinstance(X, DataFrame):
+        X = X.to_numpy
+    elif not isinstance(X, np.ndarray):
+        raise TypeError("X should be a list, array, or DataFrame of time series.")
+
+    # Get length of each time series
+    time_series_lengths = get_time_series_lengths(X)
+
+    # Truncate array for feature extraction
+    X_truncated = np.array([time_series[:time_series_lengths[i]] for i, time_series in enumerate(X)])
+
+    # Selecting time series on which to extract features since the extraction cannot be done on time series of size
+    # less than 12
+    too_short_time_series = np.nonzero(time_series_lengths < 12)[0]
+    X_extracted = X_truncated[time_series_lengths >= 12]
+
+    # Extracting features
+    cfg_file = tsfel.get_features_by_domain()
+    if len(X_extracted) != 0:
+        X_extracted = tsfel.time_series_features_extractor(cfg_file, X_extracted).to_numpy()
+    # Combining extracted features to the original time series and reinserting the time series that could not be used
+    # for feature extraction.
+    X_concat = []
+    skipped = 0
+    for i, time_series in enumerate(X_truncated):
+        if np.isin(i, too_short_time_series):
+            X_concat.append(time_series)
+            skipped += 1
+        else:
+            # We remove nan features on predict to remove errors caused by using feature extraction on time series of
+            # inconsistent size.
+            cleaned_features = list(filter(lambda f: str(f) != 'nan', X_extracted[i-skipped]))
+            X_concat.append(np.concatenate((time_series, cleaned_features), 0))
+
+    # Converting back to np arrays
+    max_input_length = np.max([len(input_) for input_ in X_concat])
+    padding = np.full((len(X), max_input_length), np.nan)
+    for i, input_ in enumerate(X_concat):
+        padding[i, :len(input_)] = input_
+
+    X_concat = padding
+
+    # Warning the user if some feature extraction could not be done.
+    if len(too_short_time_series) > 0:
+        warn("Could not extract features from time series with length inferior to 12.")
+    return X_concat
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def historize(X, timestamps=None):
+    """
+    Takes N time series of length T as input and produces a chronological sequence of T datasets that capture the
+    evolution of the time series over time. Each outputted dataset comprises time series of length t, with t varying
+    from 1 to T across the datasets to represent the increasing available information at each point in time.
+    Parameters:
+        X: dataset to be historized. A matrix of shape (N, T), where:
+            N is the number of time series
+            T is the number of timestamps in a complete series
+    Returns:
+        x_historized: Historized dataset. A matrix of shape (T, N, t in [0:T]), where:
+            T is the number of timestamps
+            N is the number of time series
+            t is the moment in history progressing from 0 to T across the datasets
+    """
+    if isinstance(X, ndarray):
+        X = X.tolist()
+    elif isinstance(X, DataFrame):
+        X = X.values.tolist()
+    elif not isinstance(X, list):
+        raise TypeError("X should be a two-dimensional list, array or DataFrame of size (N, T) "
+                         "with N the number of examples and T the number of timestamps.")
+    for n in range(len(X)):
+        if len(X[n]) != len(X[0]):
+            raise ValueError("All time series in the dataset should have the same length.")
+    if timestamps is None:
+        timestamps = [t for t in range(len(X[1]))]
+    elif isinstance(timestamps, ndarray):
+        timestamps = timestamps.tolist()
+    elif not isinstance(timestamps, list):
+        raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
+    not_included = []
+    for t in timestamps:
+        if not isinstance(t, int):
+            raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
+        if t < 0:
+            raise ValueError("Argument 'timestamps' should be a list or array of positive int.")
+        if t >= len(X[0]):
+            not_included.append(t)
+    if len(not_included) > 0:
+        raise ValueError(f"Timestamps {not_included} are not included in dataset.")
+    if len(set(timestamps)) != len(timestamps):
+        timestamps = list(set(timestamps))
+        warn("Removed duplicates timestamps in argument 'timestamps'.")
+    X_historized = []
+    for t in timestamps:
+        X_historized.append([time_series[0:t+1] for time_series in X])
+    return X_historized
