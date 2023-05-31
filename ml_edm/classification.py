@@ -1,8 +1,10 @@
+import copy
 from copy import deepcopy
 import numpy as np
 from pandas import DataFrame
 
 from dataset import extract_features, get_time_series_lengths
+from trigger_models import EconomyGamma
 
 from sklearn.ensemble import GradientBoostingClassifier
 
@@ -184,6 +186,7 @@ class ChronologicalClassifiers:
             y: List of the N corresponding labels of the training set.
         """
         # Check X and y
+        X = copy.deepcopy(X)
         if isinstance(X, list):
             X = np.array(X)
         elif isinstance(X, DataFrame):
@@ -239,7 +242,7 @@ class ChronologicalClassifiers:
 
     def predict(self, X):
         # TODO: check content of X? input validation with sklearn?
-        X = np.copy(X)
+        X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
             padding = np.full((len(X), self.max_series_length), np.nan)
@@ -294,7 +297,7 @@ class ChronologicalClassifiers:
 
     def predict_proba(self, X):
         #TODO: check content of X? input validation with sklearn?
-        X = np.copy(X)
+        X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
             padding = np.full((len(X), self.max_series_length), np.nan)
@@ -348,8 +351,6 @@ class ChronologicalClassifiers:
         return np.array(predictions)
 
 
-
-
 class EarlyClassifier:
     """
     Combines a time-indexed array of classifiers with a trigger model to allow for simple early classification.
@@ -357,27 +358,61 @@ class EarlyClassifier:
     May not support custom classifiers with unconventional methods names or structure.
     """
 
-    def __init__(self, n_classifiers=None, base_classifier=GradientBoostingClassifier(), time_indexed_classifiers = None,
-                 misclassification_cost=None, delay_cost=None, nb_groups=0, aggregation_type='gini', trigger_model=None):
-        self.classifiers = time_indexed_classifiers
-        self.trigger_model = trigger_model
-        self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
+    def __init__(self,
+                 n_classifiers=None,
+                 base_classifier=None,
+                 learned_timestamps_ratio=None,
+                 classifiers_series_lengths=None,
+                 classifiers=None,
+                 feature_extraction=True,
+                 chronological_classifiers=None,
+                 misclassification_cost=None,
+                 delay_cost=None,
+                 nb_groups=0,
+                 trigger_model_series_lengths=None,  # this should be at least contained in classifiers_series_lengths i think? what happens if trigger model exposed to time series of wrong size?
+                 aggregation_type='gini',
+                 trigger_model=None):
 
-    def fit(self, x, y, ratio_classifiers_trigger=0, calibrate=True):
-        self.classifiers.fit()
-        if calibrate:
-            self.classifiers.calibrate()
-        self.trigger_model.fit()
+        self.chronological_classifiers = \
+                ChronologicalClassifiers(n_classifiers, base_classifier, learned_timestamps_ratio, classifiers_series_lengths, classifiers, feature_extraction)\
+                    if chronological_classifiers is None else chronological_classifiers
+        self.trigger_model = EconomyGamma(misclassification_cost, delay_cost, nb_groups, trigger_model_series_lengths, aggregation_type) \
+            if trigger_model is None else trigger_model
+        #self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
 
-    def fit_classifiers(self, x, y, calibrate=True):
-        self.classifiers.fit()
-        if calibrate:
-            self.classifiers.calibrate()
+    def fit(self, X, y, val_proportion=.5):
+        val_index = int(len(X) * val_proportion)
+        self.chronological_classifiers.fit(X[:val_index], y[:val_index])
+        self.trigger_model.trigger_model_series_lengths = self.chronological_classifiers.classifiers_series_lengths
+        X_pred = np.stack([self.chronological_classifiers.predict_proba(X[val_index:, :length])
+                           for length in self.chronological_classifiers.classifiers_series_lengths], axis=1)
+        self.trigger_model.fit(X_pred, y[val_index:], self.chronological_classifiers.classes_)
+        return self
 
-    def fit_trigger(self, x, y):
-        self.trigger_model.fit()
+    def predict(self, X):
+        # TODO: check content of X? input validation with sklearn?
+        X = copy.deepcopy(X)
+        # Validate X format
+        if isinstance(X, list):
+            padding = np.full((len(X), self.chronological_classifiers.max_series_length), np.nan)
+            for i, time_series in enumerate(X):
+                padding[i, :len(time_series)] = time_series
+            X = padding
+        elif isinstance(X, DataFrame):
+            X = X.to_numpy
+        elif not isinstance(X, np.ndarray):
+            raise TypeError("X should be a list, array, or DataFrame of time series.")
+
+        # Get time series lengths
+        time_series_lengths = get_time_series_lengths(X)
+
+        classes = self.chronological_classifiers.predict(X)
+        probas = self.chronological_classifiers.predict_proba(X)
+        triggers, costs, forecasted_triggers, forecasted_costs = self.trigger_model.predict(X, time_series_lengths)
+        return classes, probas, triggers, costs, forecasted_triggers, forecasted_costs
 
 
+    """
     def predict(self, x):
         proba = self.classifiers.predict_proba()
         class_ = argmax(proba)
@@ -387,7 +422,7 @@ class EarlyClassifier:
             trigger, cost = self.trigger_model.predict()
             forecasted_trigger, forecasted_costs = None, None
         return class_, proba, trigger, cost, forecasted_trigger, forecasted_costs
-
+  
     def predict_class(self, x):
         class_ = self.classifiers.predict()
         return class_
@@ -415,3 +450,4 @@ class EarlyClassifier:
             trigger_time, cost = self.trigger_model.predict_on_first_trigger()
             forecasted_costs = None, None
         return trigger_time, class_, proba, cost, forecasted_costs
+    """

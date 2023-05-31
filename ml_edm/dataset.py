@@ -4,7 +4,7 @@ from pandas import DataFrame
 from warnings import warn
 
 
-def get_time_series_lengths(X):
+def get_time_series_lengths(X): #takes np array as input
     not_nan_coordinates = np.nonzero(np.logical_not(np.isnan(X)))
     not_nan_count_per_row = np.unique(not_nan_coordinates[0], return_counts=True)[1]
     not_nan_indices_per_row = np.split(not_nan_coordinates[1], np.cumsum(not_nan_count_per_row)[:-1])
@@ -66,65 +66,3 @@ def extract_features(X):
     if len(too_short_time_series) > 0:
         warn("Could not extract features from time series with length inferior to 12.")
     return X_concat
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-def historize(X, timestamps=None):
-    """
-    Takes N time series of length T as input and produces a chronological sequence of T datasets that capture the
-    evolution of the time series over time. Each outputted dataset comprises time series of length t, with t varying
-    from 1 to T across the datasets to represent the increasing available information at each point in time.
-    Parameters:
-        X: dataset to be historized. A matrix of shape (N, T), where:
-            N is the number of time series
-            T is the number of timestamps in a complete series
-    Returns:
-        x_historized: Historized dataset. A matrix of shape (T, N, t in [0:T]), where:
-            T is the number of timestamps
-            N is the number of time series
-            t is the moment in history progressing from 0 to T across the datasets
-    """
-    if isinstance(X, ndarray):
-        X = X.tolist()
-    elif isinstance(X, DataFrame):
-        X = X.values.tolist()
-    elif not isinstance(X, list):
-        raise TypeError("X should be a two-dimensional list, array or DataFrame of size (N, T) "
-                         "with N the number of examples and T the number of timestamps.")
-    for n in range(len(X)):
-        if len(X[n]) != len(X[0]):
-            raise ValueError("All time series in the dataset should have the same length.")
-    if timestamps is None:
-        timestamps = [t for t in range(len(X[1]))]
-    elif isinstance(timestamps, ndarray):
-        timestamps = timestamps.tolist()
-    elif not isinstance(timestamps, list):
-        raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
-    not_included = []
-    for t in timestamps:
-        if not isinstance(t, int):
-            raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
-        if t < 0:
-            raise ValueError("Argument 'timestamps' should be a list or array of positive int.")
-        if t >= len(X[0]):
-            not_included.append(t)
-    if len(not_included) > 0:
-        raise ValueError(f"Timestamps {not_included} are not included in dataset.")
-    if len(set(timestamps)) != len(timestamps):
-        timestamps = list(set(timestamps))
-        warn("Removed duplicates timestamps in argument 'timestamps'.")
-    X_historized = []
-    for t in timestamps:
-        X_historized.append([time_series[0:t+1] for time_series in X])
-    return X_historized
