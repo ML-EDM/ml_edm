@@ -10,9 +10,8 @@ def get_time_series_lengths(X): #takes np array as input
     not_nan_indices_per_row = np.split(not_nan_coordinates[1], np.cumsum(not_nan_count_per_row)[:-1])
     return np.array([np.max(array) + 1 for array in not_nan_indices_per_row])
 
+
 def extract_features(X):
-    # TODO: limits : no nan in array, doesnt work when t < 12
-    # Convert input to numpy array of shape (N, T), N number of time series, T their max_size with nan padding.
 
     if isinstance(X, list):
         max_series_length = np.max([len(time_series) for time_series in X])

@@ -1,12 +1,11 @@
 import copy
-from copy import deepcopy
 import numpy as np
 from pandas import DataFrame
 
 from dataset import extract_features, get_time_series_lengths
 from trigger_models import EconomyGamma
 
-from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier
 
 from warnings import warn
 
@@ -17,17 +16,13 @@ class ChronologicalClassifiers:
     conventions.
     """
 
-    # TODO : Comment on all functions
+    # TODO : Multivariate data
+    # TODO : Change feature extraction
+    # TODO : Add calibration
+    # TODO : deal with NaN in dataset ? (Although HGBoost is nan compatible)
     # TODO : Add set_params
-    # TODO : Multivariate data ??
-    # TODO : Calibration
-    # TODO : deal with NaN in dataset
-    # TODO : "Serizalization of all the bazar" -> pickle dump and read
-    # TODO : Make user feature extraction compatible with classifier selection
-    # TODO : Optimize predict and better predict_proba output.
-    # TODO : optimisation de seuil
-    # TODO : Verbose, tqdm loadbar?
-    # TODO : convert to numpy array
+    # TODO : Optimize decision threshold
+    # TODO : Verbose, loadbar?
     # TODO : implement sparse matrix compatibility
 
     def __init__(self,
@@ -62,7 +57,7 @@ class ChronologicalClassifiers:
         # INPUT VALIDATION / INTEGRITY
         # time_series_learning_ratio compatibility
         if learned_timestamps_ratio is not None:
-            if not isinstance(learned_timestamps_ratio, float):
+            if not isinstance(learned_timestamps_ratio, float) and not isinstance(learned_timestamps_ratio, int):
                 raise TypeError("Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
             if learned_timestamps_ratio <= 0 or learned_timestamps_ratio > 1:
                 raise ValueError("Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
@@ -73,7 +68,7 @@ class ChronologicalClassifiers:
                 incompatible.append('time_series_training_lengths')
             if classifiers is not None:
                 incompatible.append('classifiers')
-            if len(incompatible) > 1:
+            if len(incompatible) > 0:
                 raise ValueError(f"Argument 'learned_timestamps_ratio' is not compatible with arguments {incompatible}.")
 
         # base_classifier and classifier_list compatibility
@@ -114,7 +109,7 @@ class ChronologicalClassifiers:
                 warn("Removed duplicates timestamps in argument 'classifiers_series_lengths'.")
             equal.append(('classifiers_series_lengths', len(classifiers_series_lengths)))
 
-        if len(equal) > 0:
+        if len(equal) >= 2:
             for i in range(len(equal) - 1):
                 if equal[i][1] != equal[i+1][1]:
                     raise ValueError(f"Contradictory values given to arguments {[e[0] for e in equal]}.")
@@ -143,8 +138,8 @@ class ChronologicalClassifiers:
         elif classifiers is not None:
             self.base_classifier = None
         else:
-            self.base_classifier = GradientBoostingClassifier()
-            print("Using 'base_classifier = sklearn.ensemble.GradientBoostingClassifier() by default.")
+            self.base_classifier = HistGradientBoostingClassifier()
+            print("Using 'base_classifier = sklearn.ensemble.HistGradientBoostingClassifier() by default.")
 
         # Other attributes (classifiers are initialized in fit)
         self.learned_timestamps_ratio = learned_timestamps_ratio if learned_timestamps_ratio is not None else None
@@ -169,9 +164,9 @@ class ChronologicalClassifiers:
             "n_classifiers": self.n_classifiers,
             "learned_timestamps_ratio": self.learned_timestamps_ratio,
             "feature_extraction": self.feature_extraction,
-            "prior": self.class_prior,
+            "class_prior": self.class_prior,
             "max_series_length": self.max_series_length,
-            "classes": self.classes_
+            "classes_": self.classes_
         }
 
     def fit(self, X, y, *args, **kwargs):
@@ -187,6 +182,7 @@ class ChronologicalClassifiers:
         """
         # Check X and y
         X = copy.deepcopy(X)
+        y = copy.deepcopy(y)
         if isinstance(X, list):
             X = np.array(X)
         elif isinstance(X, DataFrame):
@@ -198,13 +194,13 @@ class ChronologicalClassifiers:
             if len(X[n]) != len(X[0]):
                 raise ValueError("All time series in the dataset should have the same length.")
         if len(X) == 0:
-            warn("Dataset to predict 'X' is empty.")
+            raise ValueError("Dataset to fit 'X' is empty.")
         if isinstance(y, list):
             y = np.array(y)
         elif isinstance(X, DataFrame):
             y = y.to_numpy()
         elif not isinstance(y, np.ndarray):
-            raise TypeError("y should be a list of classes of size N with N the number of examples in X")
+            raise TypeError("y should be a list of labels of size N with N the number of examples in X")
         if len(y) != len(X):
             raise ValueError("y should be a list of classes of size N with N the number of examples in X")
 
@@ -214,14 +210,14 @@ class ChronologicalClassifiers:
             self.n_classifiers = int(self.learned_timestamps_ratio * self.max_series_length)
             if self.n_classifiers == 0:
                 self.n_classifiers = 1
-        if self.max_series_length < self.n_classifiers:
+        if self.n_classifiers > self.max_series_length:
             if self.classifiers is not None or self.classifiers_series_lengths is not None:
                 raise ValueError(f"Not enough timestamps to learn {self.n_classifiers} classifiers on")
             self.n_classifiers = self.max_series_length
             warn(f"Not enough timestamps to learn {self.n_classifiers} classifiers on. Changing number of classifiers "
                  f"to {self.max_series_length}.")
         if self.classifiers is None:
-            self.classifiers = [deepcopy(self.base_classifier) for _ in range(self.n_classifiers)]
+            self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.n_classifiers)]
         if self.classifiers_series_lengths is None:
             self.classifiers_series_lengths = np.array([int(self.max_series_length * (i + 1) / self.n_classifiers) for i in
                                                         range(self.n_classifiers)])
@@ -233,15 +229,14 @@ class ChronologicalClassifiers:
             self.classifiers[i].fit(Xt, y, *args, **kwargs)
 
         # Getting prior_probabilities
-        # TODO: maybe make this try except?
-        self.classes_ = self.classifiers[0].classes_
-        self.class_prior = np.array([np.count_nonzero(y == class_) / len(y) for class_ in self.classes_])
-
+        try:
+            self.classes_ = self.classifiers[0].classes_
+            self.class_prior = np.array([np.count_nonzero(y == class_) / len(y) for class_ in self.classes_])
+        except AttributeError:
+            warn("Classifier does not have a 'classes_' attribute. Could not obtain prior probabilities.")
         return self
 
-
     def predict(self, X):
-        # TODO: check content of X? input validation with sklearn?
         X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
@@ -296,7 +291,6 @@ class ChronologicalClassifiers:
         return np.array(predictions)
 
     def predict_proba(self, X):
-        #TODO: check content of X? input validation with sklearn?
         X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
@@ -408,8 +402,8 @@ class EarlyClassifier:
 
         classes = self.chronological_classifiers.predict(X)
         probas = self.chronological_classifiers.predict_proba(X)
-        triggers, costs, forecasted_triggers, forecasted_costs = self.trigger_model.predict(X, time_series_lengths)
-        return classes, probas, triggers, costs, forecasted_triggers, forecasted_costs
+        triggers, costs = self.trigger_model.predict(X, time_series_lengths)
+        return classes, probas, triggers, costs
 
 
     """

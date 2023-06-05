@@ -17,38 +17,46 @@ class EconomyGamma(NonMyopicTriggerModel):
         self.nb_groups = nb_groups
         self.misclassification_cost = misclassification_cost
         self.delay_cost = delay_cost
-        self.aggregation_function = np.max
-        self.multiclass = None
-        self.classes_ = None
         self.trigger_model_series_lengths = np.array(trigger_model_series_lengths)
+        self.aggregation_function = np.max
+        self.thresholds = None  # shape (T, K-1)
         self.transition_matrices = None  # shape (T-1, K, K)
         self.confusion_matrices = None  # shape (T, K, P, P)
-        self.thresholds = None  # shape (T, K-1)
+        self.classes_ = None
+        self.initial_cost = None
+        self.multiclass = None
 
 
+    # Xpred shape (N, T, P), values = probability of each class according to the classifier
     def fit(self, X_pred, y, classes_=None):
-        # shape (N, T, P), values = probability of each class according to the classifier
+
+        # Initialize classes_, initial_class and multiclass
         self.classes_ = np.array(classes_) if classes_ is not None else np.arange(np.min(y), np.max(y)+1)
         y = np.array([np.nonzero(self.classes_ == y_)[0][0] for y_ in y])
         prior_class_prediction = np.argmax(np.unique(y, return_counts=True)[1])
         self.initial_cost = np.sum(np.unique(y, return_counts=True)[1]/y.shape[0] * self.misclassification_cost[:,prior_class_prediction]) + self.delay_cost(0)
         self.multiclass = False if len(self.classes_) <= 2 else True
-        # shape (N, T), values = aggregated value or 1st class proba
+
+        # Aggregate values if multiclass : shape (N, T), values = aggregated value or 1st class proba
         X_aggregated = np.apply_along_axis(self.aggregation_function, 2, X_pred) if self.multiclass else X_pred[:, :, 0]
-        # shape (T, N), values = sorted aggregated value
+
+        # Obtain thresholds for each group : X_sorted shape (T, N), values = sorted aggregated value
         X_sorted = np.sort(X_aggregated.transpose())
         thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_groups+1)[1:-1].astype(int)
         self.thresholds = X_sorted[:, thresholds_indices]
-        # shape (T, N), values = group ID of each pred
-        # argsort seems to be broken ?
-        #X_intervals = np.floor_divide(np.argsort(X_aggregated.transpose(), axis=1), X_pred.shape[0] / self.nb_groups)
+
+        # Get intervals given threshold : shape (T, N), values = group ID of each pred
         X_intervals = np.array([[np.count_nonzero([threshold <= x for threshold in self.thresholds[i]]) for j, x in enumerate(timestamp_data)] for i, timestamp_data in enumerate(X_aggregated.transpose())])
+        # X_intervals = np.floor_divide(np.argsort(X_aggregated.transpose(), axis=1), X_pred.shape[0] / self.nb_groups)  # argsort seems to be broken ?
+
+        # Obtain transition_matrices
         self.transition_matrices = []
         for t in range(len(self.trigger_model_series_lengths) - 1):
             self.transition_matrices.append(np.array([np.array([np.count_nonzero((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(self.nb_groups)]) /
                                                       np.count_nonzero(X_intervals[t] == i) for i in range(self.nb_groups)]))
         self.transition_matrices = np.nan_to_num(self.transition_matrices, nan=1/self.nb_groups)  # fix nans created by division by 0 when not enough data
-        # shape (T, N) values = class of each prediction
+
+        # Obtain confusion matrices : X_class shape (T, N) values = class of each prediction
         X_class = np.apply_along_axis(np.argmax, 2, X_pred).transpose()
         self.confusion_matrices = []
         for t, timestamp_data in enumerate(X_class):
@@ -59,7 +67,7 @@ class EconomyGamma(NonMyopicTriggerModel):
         return self
 
     def predict(self, X_pred, predicted_series_lengths):
-        #for now supposes the timestamps in corresponding_timestamps correspond to the timestamps learned in fit. TODO: deal with this <
+        # Update predicted_series_lengths to compatible lengths
         predicted_series_lengths = np.array(predicted_series_lengths)
         truncated = False
         for i, pred_length in enumerate(predicted_series_lengths):
@@ -69,24 +77,29 @@ class EconomyGamma(NonMyopicTriggerModel):
                         predicted_series_lengths[i] = length
                         truncated = True
                         break
-        # TODO deal with pred_length < trigger_model_series_lengths[0] and write warnings / delay cost takes lengths as input??
-        # shape (N), values = aggregated pred
+
+        # Aggregate probas : shape (N), values = aggregated pred
         X_aggregated = np.apply_along_axis(self.aggregation_function, 1, X_pred) if self.multiclass else X_pred[:, 0]
-        # shape (N), values = group
+
+        # Get intervals given threshold : shape (N), values = group
         X_intervals = []
         for i, x in enumerate(X_aggregated):
             if predicted_series_lengths[i] < np.min(self.trigger_model_series_lengths):
                 interval = np.nan
             else:
                 interval = np.count_nonzero([threshold <= x for threshold
-                                  in self.thresholds[
-                                      np.nonzero(self.trigger_model_series_lengths == predicted_series_lengths[i])[0][
-                                          0]]])
+                                             in self.thresholds[
+                                                 np.nonzero(
+                                                     self.trigger_model_series_lengths == predicted_series_lengths[i])[
+                                                     0][0]]])
                 X_intervals.append(interval)
-        triggers, costs, forecasted_triggers, forecasted_costs = [], [], [], []
+
+        # Calculate and return costs
+        triggers, costs = [], []
         returned_priors = False
         for n, group in enumerate(X_intervals):
             prediction_forecasted_costs = []
+            # If series length is not covered return initial cost
             if predicted_series_lengths[n] < np.min(self.trigger_model_series_lengths):
                 prediction_forecasted_costs.append(self.initial_cost)
                 predicted_series_lengths[n] = np.min(self.trigger_model_series_lengths)
@@ -95,26 +108,26 @@ class EconomyGamma(NonMyopicTriggerModel):
             else:
                 gamma = np.zeros(self.nb_groups)
                 gamma[group] = 1
-            # for each length from prediction length to max_length
+            # Estimate cost for each length from prediction length to max_length
             for t in range(np.nonzero(self.trigger_model_series_lengths == predicted_series_lengths[n])[0][0], len(self.trigger_model_series_lengths)):
-                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.misclassification_cost) + self.delay_cost(self.trigger_model_series_lengths[t])
-                prediction_forecasted_costs.append(cost)
+                misclassification_cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.misclassification_cost)
+                delay_cost = self.delay_cost(self.trigger_model_series_lengths[t])
+                prediction_forecasted_costs.append(misclassification_cost + delay_cost)
                 if t != len(self.trigger_model_series_lengths) - 1:
-                    gamma = np.matmul(gamma, self.transition_matrices[t])
+                    gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
+            # Save estimated costs and determine trigger time
             prediction_forecasted_costs = np.array(prediction_forecasted_costs)
             prediction_forecasted_trigger = np.argmin(prediction_forecasted_costs)
-            prediction_cost = prediction_forecasted_costs[0]
-            prediction_trigger = True if prediction_forecasted_trigger == 0 else False
-            triggers.append(prediction_trigger)
-            costs.append(prediction_cost)
-            forecasted_triggers.append(prediction_forecasted_trigger)
-            forecasted_costs.append(prediction_forecasted_costs)
-            if truncated:
-                warn("Some predictions lengths were unknown to the trigger model. Last known length was assumed")
-            if returned_priors:
-                warn("Some predictions lengths where below that of the first length known by the trigger model. "
-                              "Cost of predicting the most frequent class in priors was used.")
-        return np.array(triggers), np.array(costs), np.array(forecasted_triggers), np.array(forecasted_costs)
+            triggers.append(prediction_forecasted_trigger)
+            costs.append(prediction_forecasted_costs)
+
+        # Send warnings and return
+        if truncated:
+            warn("Some predictions lengths were unknown to the trigger model. Last known length was assumed")
+        if returned_priors:
+            warn("Some predictions lengths where below that of the first length known by the trigger model. "
+                 "Cost of predicting the most frequent class in priors was used.")
+        return np.array(triggers), np.array(costs)
 
 
 """
