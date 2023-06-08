@@ -25,9 +25,10 @@ class ChronologicalClassifiers:
     # TODO : Verbose, loadbar?
     # TODO : implement sparse matrix compatibility
     # TODO : check_estimator scikitlearn -> make estimator
+    # TODO : create factory code?
 
     def __init__(self,
-                 n_classifiers=None,
+                 nb_classifiers=None,
                  base_classifier=None,
                  learned_timestamps_ratio=None,  # learning_timestamps_ratio | learning_ratio_per_time_series | time_series_learning_ratio | learned_timestamps_ratio
                  models_series_lengths=None,  # training_time_series_lengths | time_series_training_lengths | learned_time_series_lengths | models_input_lengths
@@ -38,11 +39,11 @@ class ChronologicalClassifiers:
              base_classifier: Instance of a classifier to be cloned and learned for each timestamp to be classified.
                               Extreme gradient boosting (xgboost) is used by default.
             learned_timestamps_ratio: Proportion of timestamps the object will learn models on given any training set.
-                              Attribute n_classifiers is deduced from the time series' length in the training set.
-               n_classifiers: Number of classifiers in the list.
+                              Attribute nb_classifiers is deduced from the time series' length in the training set.
+               nb_classifiers: Number of classifiers in the list.
                               Attribute timestamps_ratio is deduced from the length of the training set.
             classifiers: Custom list of classifiers to be used (might be fitted already)
-                              Attribute n_classifiers is deduced to be the length of the custom_list.
+                              Attribute nb_classifiers is deduced to be the length of the custom_list.
                               Attribute timestamps_ratio is deduced from the time series' length in the training set.
         Attributes:
             self.classifiers: List of classifiers.
@@ -50,11 +51,11 @@ class ChronologicalClassifiers:
             self.
             self.base_classifier: Classifier to clone to get the classifiers in the list.
             self.timestamps_ratio: Proportion of timestamps to learn models on given any training set.
-            self.n_classifiers: Length of list.
+            self.nb_classifiers: Length of list.
             self.registered_timestamps
 
         """
-        self.n_classifiers = n_classifiers
+        self.nb_classifiers = nb_classifiers
         self.base_classifier = base_classifier
         self.learned_timestamps_ratio = learned_timestamps_ratio
         self.models_series_lengths = models_series_lengths
@@ -65,14 +66,14 @@ class ChronologicalClassifiers:
         return self.classifiers[item]
 
     def __len__(self):
-        return self.n_classifiers
+        return self.nb_classifiers
 
     def get_params(self):
         return {
             "classifiers": self.classifiers,
             "models_series_lengths": self.models_series_lengths,
             "base_classifier": self.base_classifier,
-            "n_classifiers": self.n_classifiers,
+            "nb_classifiers": self.nb_classifiers,
             "learned_timestamps_ratio": self.learned_timestamps_ratio,
             "feature_extraction": self.feature_extraction,
             "class_prior": self.class_prior,
@@ -101,8 +102,8 @@ class ChronologicalClassifiers:
                 raise ValueError(
                     "Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
             incompatible = []
-            if self.n_classifiers is not None:
-                incompatible.append('n_classifiers')
+            if self.nb_classifiers is not None:
+                incompatible.append('nb_classifiers')
             if self.models_series_lengths is not None:
                 incompatible.append('time_series_training_lengths')
             if self.classifiers is not None:
@@ -118,12 +119,12 @@ class ChronologicalClassifiers:
 
         # Numerical coherence between arguments
         equal = []
-        if self.n_classifiers is not None:
-            if not isinstance(self.n_classifiers, int):
-                raise TypeError("Argument 'n_classifiers' should be a strictly positive int.")
-            if self.n_classifiers <= 0:
-                raise ValueError("Argument 'n_classifiers' should be a strictly positive int.")
-            equal.append(('n_classifiers', self.n_classifiers))
+        if self.nb_classifiers is not None:
+            if not isinstance(self.nb_classifiers, int):
+                raise TypeError("Argument 'nb_classifiers' should be a strictly positive int.")
+            if self.nb_classifiers <= 0:
+                raise ValueError("Argument 'nb_classifiers' should be a strictly positive int.")
+            equal.append(('nb_classifiers', self.nb_classifiers))
 
         if self.classifiers is not None:
             if not isinstance(self.classifiers, list):
@@ -184,26 +185,26 @@ class ChronologicalClassifiers:
             raise ValueError("y should be a list of classes of size N with N the number of examples in X")
 
         # ASSIGNMENTS
-        # self.n_classifiers
+        # self.nb_classifiers
         self.max_series_length = X.shape[1]
-        if self.n_classifiers is None:
+        if self.nb_classifiers is None:
             if self.classifiers is not None:
-                self.n_classifiers = len(self.classifiers)
+                self.nb_classifiers = len(self.classifiers)
             elif self.models_series_lengths is not None:
-                self.n_classifiers = len(self.models_series_lengths)
+                self.nb_classifiers = len(self.models_series_lengths)
             elif self.learned_timestamps_ratio is not None:
-                self.n_classifiers = int(self.learned_timestamps_ratio * self.max_series_length)
-                if self.n_classifiers == 0:
-                    self.n_classifiers = 1
-                self.n_classifiers = None
+                self.nb_classifiers = int(self.learned_timestamps_ratio * self.max_series_length)
+                if self.nb_classifiers == 0:
+                    self.nb_classifiers = 1
+                self.nb_classifiers = None
             else:
-                self.n_classifiers = 20
-                print("Using 'n_classifiers=20 by default.")
-        if self.n_classifiers > self.max_series_length:
+                self.nb_classifiers = 20
+                print("Using 'nb_classifiers=20 by default.")
+        if self.nb_classifiers > self.max_series_length:
             if self.classifiers is not None or self.models_series_lengths is not None:
-                raise ValueError(f"Not enough timestamps to learn {self.n_classifiers} classifiers on")
-            self.n_classifiers = self.max_series_length
-            warn(f"Not enough timestamps to learn {self.n_classifiers} classifiers on. Changing number of classifiers "
+                raise ValueError(f"Not enough timestamps to learn {self.nb_classifiers} classifiers on")
+            self.nb_classifiers = self.max_series_length
+            warn(f"Not enough timestamps to learn {self.nb_classifiers} classifiers on. Changing number of classifiers "
                  f"to {self.max_series_length}.")
 
         # self.base_classifier
@@ -212,12 +213,12 @@ class ChronologicalClassifiers:
                 self.base_classifier = HistGradientBoostingClassifier()
                 print("Using 'base_classifier = sklearn.ensemble.HistGradientBoostingClassifier() by default.")
         if self.models_series_lengths is None:
-            self.models_series_lengths = np.array([int(self.max_series_length * (i + 1) / self.n_classifiers) for i in
-                                                   range(self.n_classifiers)])
+            self.models_series_lengths = np.array([int(self.max_series_length * (i + 1) / self.nb_classifiers) for i in
+                                                   range(self.nb_classifiers)])
         else:
             self.models_series_lengths = np.sort(self.models_series_lengths)
         if self.classifiers is None:
-            self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.n_classifiers)]
+            self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.nb_classifiers)]
 
         # Feature extraction and fitting
         for i, ts_length in enumerate(self.models_series_lengths):
@@ -351,43 +352,94 @@ class EarlyClassifier:
     Supports both predictions and triggering.
     May not support custom classifiers with unconventional methods names or structure.
     """
-
     def __init__(self,
-                 n_classifiers=None,
-                 base_classifier=None,
+                 misclassification_cost,
+                 delay_cost,
+                 nb_classifiers=None,
+                 nb_intervals=5,
+                 base_classifier=HistGradientBoostingClassifier(),
                  learned_timestamps_ratio=None,
-                 models_series_lengths=None,
-                 classifiers=None,
-                 feature_extraction=True,
+                 feature_extraction=True,  # TODO: delete this once a better feature extraction is implemented
                  chronological_classifiers=None,
-                 misclassification_cost=None,
-                 delay_cost=None,
-                 nb_groups=0,
-                 aggregation_type='gini',
                  trigger_model=None):
+        # models_series_lengths=None,
+        # classifiers=None,
+        # feature_extraction=True,
+        # aggregation_function='max',
 
-        self.chronological_classifiers = \
-                ChronologicalClassifiers(n_classifiers, base_classifier, learned_timestamps_ratio, models_series_lengths, classifiers, feature_extraction)\
-                    if chronological_classifiers is None else chronological_classifiers
-        self.trigger_model = EconomyGamma(misclassification_cost, delay_cost, nb_groups, models_series_lengths, aggregation_type) \
-            if trigger_model is None else trigger_model
-        #self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
+        self.misclassification_cost = misclassification_cost
+        self.delay_cost = delay_cost
+        self.nb_classifiers = nb_classifiers
+        self.learned_timestamps_ratio = learned_timestamps_ratio
+        self.base_classifier = base_classifier
+        self.nb_intervals = nb_intervals
+        self.chronological_classifiers = chronological_classifiers
+        self.trigger_model = trigger_model
+
+    @property
+    def misclassification_cost(self):
+        return self.trigger_model.misclassification_cost
+
+    @property
+    def delay_cost(self):
+        return self.trigger_model.delay_cost
+
+    @property
+    def nb_classifiers(self):
+        return self.chronological_classifiers.nb_classifiers
+
+    @property
+    def learned_timestamps_ratio(self):
+        return self.chronological_classifiers.learned_timestamps_ratio
+
+    @property
+    def base_classifier(self):
+        return self.chronological_classifiers.base_classifier
+
+    def nb_intervals(self):
+        return self.trigger_model.nb_intervals
+
+    def _fit_classifiers(self, X, y):
+        self.chronological_classifiers.fit(X, y)
+        return self
+
+    def _fit_trigger_model(self, X, y):
+        X_pred = np.stack([self.chronological_classifiers.predict_proba(X[:, :length])
+                           for length in self.chronological_classifiers.models_series_lengths], axis=1)
+        self.trigger_model.fit(X_pred, y, self.chronological_classifiers.classes_)
 
     def fit(self, X, y, val_proportion=.5):
+
+        if self.chronological_classifiers is not None:
+            if not isinstance(self.chronological_classifiers, ChronologicalClassifiers):
+                raise ValueError(
+                    "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
+        else:
+            self.chronological_classifiers = ChronologicalClassifiers(self.nb_classifiers, self.base_classifier,
+                                                                      self.learned_timestamps_ratio)
+
+        if self.trigger_model is not None:
+            if not isinstance(self.trigger_model, EconomyGamma):
+                raise ValueError(
+                    "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
+        else:
+            self.trigger_model = EconomyGamma(self.misclassification_cost, self.delay_cost,
+                                                self.chronological_classifiers.models_series_lengths, self.nb_intervals)
+
+
+        # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
+
         val_index = int(len(X) * val_proportion)
-        self.chronological_classifiers.fit(X[:val_index], y[:val_index])
-        self.trigger_model.models_series_lengths = self.chronological_classifiers.models_series_lengths
-        X_pred = np.stack([self.chronological_classifiers.predict_proba(X[val_index:, :length])
-                           for length in self.chronological_classifiers.models_series_lengths], axis=1)
-        self.trigger_model.fit(X_pred, y[val_index:], self.chronological_classifiers.classes_)
+        self._fit_classifiers(X[:val_index], y[:val_index])
+        self._fit_trigger_model(X[val_index:], y[val_index:])
         return self
 
     def predict(self, X):
-        # TODO: check content of X? input validation with sklearn?
+
         X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
-            padding = np.full((len(X), self.chronological_classifiers.max_series_length), np.nan)
+            padding = np.full((len(X), self.max_series_length), np.nan)
             for i, time_series in enumerate(X):
                 padding[i, :len(time_series)] = time_series
             X = padding
@@ -395,6 +447,8 @@ class EarlyClassifier:
             X = X.to_numpy
         elif not isinstance(X, np.ndarray):
             raise TypeError("X should be a list, array, or DataFrame of time series.")
+        if X.ndim != 2:
+            raise ValueError("X should be a list, array, or DataFrame of time series.")
 
         # Get time series lengths
         time_series_lengths = get_time_series_lengths(X)

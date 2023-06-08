@@ -24,11 +24,10 @@ class EconomyGamma(NonMyopicTriggerModel):
     """
 
     def __init__(self,
-                 misclassification_cost=None,
-                 delay_cost=None,
-                 # TODO cost_matrices
-                 models_series_lengths=None,  # TODO Deal with default assingment???????
-                 nb_intervals=5,  # TODO default here as well?????
+                 misclassification_cost,
+                 delay_cost,
+                 models_series_lengths,
+                 nb_intervals=5,
                  aggregation_function='max'):
 
         self.misclassification_cost = misclassification_cost
@@ -37,13 +36,25 @@ class EconomyGamma(NonMyopicTriggerModel):
         self.nb_intervals = nb_intervals
         self.aggregation_function = aggregation_function
 
+    def get_params(self):
+        return {
+            "misclassification_cost": self.misclassification_cost,
+            "delay_cost": self.delay_cost,
+            "models_series_lengths": self.models_series_lengths,
+            "nb_intervals": self.nb_intervals,
+            "aggregation_function": self.aggregation_function,
+            "thresholds": self.thresholds,
+            "transition_matrices": self.transition_matrices,
+            "confusion_matrices": self.confusion_matrices,
+            "classes_": self.classes_,
+            "multiclass": self.multiclass,
+            "initial_cost": self.initial_cost,
+        }
 
     # Xpred shape (N, T, P), values = probability of each class according to the classifier
     def fit(self, X_pred, y, classes_=None):
 
         # DATA VALIDATION
-        if self.misclassification_cost is None:
-            raise ValueError("Argument misclassification_cost is missing.")
         if isinstance(self.misclassification_cost, list):
             self.misclassification_cost = np.array(self.misclassification_cost)
         elif not isinstance(self.misclassification_cost, np.ndarray):
