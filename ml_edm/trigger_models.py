@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 from warnings import warn
-from base_trigger_models import TriggerModel, NonMyopicTriggerModel
 import copy
 
 
@@ -12,7 +11,7 @@ def gini(probas):
 KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
 
-class EconomyGamma(NonMyopicTriggerModel):
+class EconomyGamma():
     """
     A highly performing non-myopic trigger model based on the economy architecture for early time series classification.
     Allows the anticipation of future decision costs based on a supervised grouping of time series and user-defined
@@ -243,7 +242,7 @@ class EconomyGamma(NonMyopicTriggerModel):
 
             # Save estimated costs and determine trigger time
             prediction_forecasted_costs = np.array(prediction_forecasted_costs)
-            prediction_forecasted_trigger = np.argmin(prediction_forecasted_costs)
+            prediction_forecasted_trigger = True if np.argmin(prediction_forecasted_costs) == 0 else False
             triggers.append(prediction_forecasted_trigger)
             costs.append(prediction_forecasted_costs)
 

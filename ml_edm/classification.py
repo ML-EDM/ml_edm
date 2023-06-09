@@ -20,7 +20,7 @@ class ChronologicalClassifiers:
     # TODO : Change feature extraction
     # TODO : Add calibration
     # TODO : deal with NaN in dataset ? (Although HGBoost is nan compatible)
-    # TODO : Add set_params
+    # TODO : Add set_params, Add setters in every class, compatibility setter in Early Classifier
     # TODO : Optimize decision threshold
     # TODO : Verbose, loadbar?
     # TODO : implement sparse matrix compatibility
@@ -196,7 +196,6 @@ class ChronologicalClassifiers:
                 self.nb_classifiers = int(self.learned_timestamps_ratio * self.max_series_length)
                 if self.nb_classifiers == 0:
                     self.nb_classifiers = 1
-                self.nb_classifiers = None
             else:
                 self.nb_classifiers = 20
                 print("Using 'nb_classifiers=20 by default.")
@@ -366,13 +365,13 @@ class EarlyClassifier:
         # classifiers=None,
         # feature_extraction=True,
         # aggregation_function='max',
-
-        self.misclassification_cost = misclassification_cost
-        self.delay_cost = delay_cost
-        self.nb_classifiers = nb_classifiers
-        self.learned_timestamps_ratio = learned_timestamps_ratio
-        self.base_classifier = base_classifier
-        self.nb_intervals = nb_intervals
+        self._misclassification_cost = misclassification_cost
+        self._delay_cost = delay_cost
+        self._nb_classifiers = nb_classifiers
+        self._learned_timestamps_ratio = learned_timestamps_ratio
+        self._base_classifier = base_classifier
+        self._nb_intervals = nb_intervals
+        self._feature_extraction = feature_extraction
         self.chronological_classifiers = chronological_classifiers
         self.trigger_model = trigger_model
 
@@ -380,24 +379,71 @@ class EarlyClassifier:
     def misclassification_cost(self):
         return self.trigger_model.misclassification_cost
 
+    @misclassification_cost.setter
+    def misclassification_cost(self, value):
+        self.misclassification_cost = value
+
     @property
     def delay_cost(self):
         return self.trigger_model.delay_cost
+
+    @delay_cost.setter
+    def delay_cost(self, value):
+        self.delay_cost = value
 
     @property
     def nb_classifiers(self):
         return self.chronological_classifiers.nb_classifiers
 
+    @nb_classifiers.setter
+    def nb_classifiers(self, value):
+        self.nb_classifiers = value
+
     @property
     def learned_timestamps_ratio(self):
         return self.chronological_classifiers.learned_timestamps_ratio
+
+    @learned_timestamps_ratio.setter
+    def learned_timestamps_ratio(self, value):
+        self.learned_timestamps_ratio = value
 
     @property
     def base_classifier(self):
         return self.chronological_classifiers.base_classifier
 
+    @base_classifier.setter
+    def base_classifier(self, value):
+        self.base_classifier = value
+
+    @property
     def nb_intervals(self):
         return self.trigger_model.nb_intervals
+
+    @nb_intervals.setter
+    def nb_intervals(self, value):
+        self.nb_intervals = value
+
+    def get_params(self):
+        return {
+            "classifiers": self.chronological_classifiers.classifiers,
+            "models_series_lengths": self.chronological_classifiers.models_series_lengths,
+            "base_classifier": self.chronological_classifiers.base_classifier,
+            "nb_classifiers": self.chronological_classifiers.nb_classifiers,
+            "learned_timestamps_ratio": self.chronological_classifiers.learned_timestamps_ratio,
+            "misclassification_cost": self.trigger_model.misclassification_cost,
+            "delay_cost": self.trigger_model.delay_cost,
+            "nb_intervals": self.trigger_model.nb_intervals,
+            "aggregation_function": self.trigger_model.aggregation_function,
+            "thresholds": self.trigger_model.thresholds,
+            "transition_matrices": self.trigger_model.transition_matrices,
+            "confusion_matrices": self.trigger_model.confusion_matrices,
+            "feature_extraction": self.chronological_classifiers.feature_extraction,
+            "class_prior": self.chronological_classifiers.class_prior,
+            "max_series_length": self.chronological_classifiers.max_series_length,
+            "classes_": self.chronological_classifiers.classes_,
+            "multiclass": self.trigger_model.multiclass,
+            "initial_cost": self.trigger_model.initial_cost,
+        }
 
     def _fit_classifiers(self, X, y):
         self.chronological_classifiers.fit(X, y)
@@ -410,28 +456,34 @@ class EarlyClassifier:
 
     def fit(self, X, y, val_proportion=.5):
 
+        if not isinstance(X, list) and not isinstance(X, np.ndarray) and not isinstance(X, pd.DataFrame):
+            raise TypeError("X should be a 2-dimensional list, array or DataFrame of size (N, T) with N the number "
+                            "of examples and T the number of timestamps.")
+
+        val_index = int(len(X) * val_proportion)
+
         if self.chronological_classifiers is not None:
             if not isinstance(self.chronological_classifiers, ChronologicalClassifiers):
                 raise ValueError(
                     "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
         else:
-            self.chronological_classifiers = ChronologicalClassifiers(self.nb_classifiers, self.base_classifier,
-                                                                      self.learned_timestamps_ratio)
+            self.chronological_classifiers = ChronologicalClassifiers(self._nb_classifiers,
+                                                                      self._base_classifier,
+                                                                      self._learned_timestamps_ratio,
+                                                                      feature_extraction=self._feature_extraction)
+
+        self._fit_classifiers(X[:val_index], y[:val_index])
 
         if self.trigger_model is not None:
             if not isinstance(self.trigger_model, EconomyGamma):
                 raise ValueError(
                     "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
         else:
-            self.trigger_model = EconomyGamma(self.misclassification_cost, self.delay_cost,
-                                                self.chronological_classifiers.models_series_lengths, self.nb_intervals)
+            self.trigger_model = EconomyGamma(self._misclassification_cost, self._delay_cost,
+                                              self.chronological_classifiers.models_series_lengths, self._nb_intervals)
 
-
-        # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
-
-        val_index = int(len(X) * val_proportion)
-        self._fit_classifiers(X[:val_index], y[:val_index])
         self._fit_trigger_model(X[val_index:], y[val_index:])
+        # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
         return self
 
     def predict(self, X):
@@ -439,7 +491,7 @@ class EarlyClassifier:
         X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
-            padding = np.full((len(X), self.max_series_length), np.nan)
+            padding = np.full((len(X), self.chronological_classifiers.max_series_length), np.nan)
             for i, time_series in enumerate(X):
                 padding[i, :len(time_series)] = time_series
             X = padding
