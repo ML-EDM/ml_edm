@@ -11,27 +11,84 @@ def gini(probas):
 KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
 
-class EconomyGamma():
+class EconomyGamma:
     """
     A highly performing non-myopic trigger model based on the economy architecture for early time series classification.
     Allows the anticipation of future decision costs based on a supervised grouping of time series and user-defined
     costs for delay and misclassification. Trigger models aim to determine the best time to trigger a decision given
-    evolving time series.
-    Introduced in :
-    Early classification of time series, cost-based optimization criterion and algorithms - Y. Achenchabe, A. Bondu,
+    evolving time series. Can be used in junction with a Chronological Classifier object for early classification tasks.
+    Introduced in paper [1].
+
+    Parameters:
+            misclassification_cost: numpy.ndarray
+                Array of size Y*Y where Y is the number of classes and where each value at indices
+                [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
+                matrix will be all zeros. This cost must be defined by a domain expert and be expressed in the same unit
+                as the delay cost.
+            delay_cost: python function
+                Function that takes as input a time series input length and returns the timely cost of waiting
+                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
+                be expressed in the same unit as the misclassification cost.
+            models_input_lengths: numpy.ndarray
+                Input lengths for which a transition matrix and confusion matrix and thresholds are computed. These
+                numbers of measurements/timestamps should be the same as for the trained chronological classifiers.
+            nb_intervals: int, default=5
+                Number of groups to aggregate the training time series to for each input length during learning of the
+                trigger model. The optimal value of this hyperparameter may depend on the task.
+            aggregation_function: function/string. default='max'
+                Function to aggregate the probabilities of each class for each time series prediction in the multiclass
+                case to create the intervals thresholds. Known aggregation functions are listed in the
+                'KNOWN_AGGREGATIONS' constant.
+                See paper [2] for more detail.
+
+    Attributes:
+        thresholds: numpy.ndarray
+             Array of shape (T, nb_intervals-1) where T is the number of input_lengths known by the trigger model.
+             Thresholds correspond to the values between which the first class probability (or aggregated probabilities
+             in the multiclass case) need to fall for a prediction to be aggregated to a certain group (interval).
+             See [1] for more details.
+        transition_matrices: numpy.ndarray
+            Markov chain matrices of shape (T-1, nb,intervals, nb_intervals) where T is the number of input_lengths
+            known by the trigger model and where each row t contains the transition matrix of intervals from timestamp t
+            to timestamp t+1.
+            Each value [i,j] in the row t represents the probability for a time series to belonging to group j at t+1
+            given that it belonged to group i at t.
+            See [1] for more details.
+        confusion_matrices: numpy.ndarray
+            Array of shape (T, nb_intervals, Y, Y) where T is the number of input_lengths known by the trigger model and
+            Y the number of classes. Contains for each input length the confusion matrix of the time series contained in
+            each interval, with values [i, j] the probabilities of being classified in class j when the actual series
+            class is i.
+        classes_: numpy.ndarray
+            Array showing the names and order of classes, necessary to interpret the predictions contained in the
+            training set.
+        initial_cost: float
+            Cost returned when trying to obtain the delay and misclassification cost associated to the prediction of a
+            time series which length is not known by the trigger model (not contained in 'models_input_lengths') and
+            below that of the first known length.
+            Returns 0 for the the delay_cost summed with the cost of predicting the class with the highest prior
+            probability found during training.
+        multiclass: boolean
+            Boolean representing whether the problem is multiclass or not. Influences whether the aggregation functions
+            will be used or not.
+            See paper [2] for more detail.
+
+    [1] Early classification of time series, cost-based optimization criterion and algorithms - Y. Achenchabe, A. Bondu,
     A. Cornuejols, A. Dachraoui - Machine Learning 2021
+    [2] Early Classification of Time Series: Cost-based multiclass Algorithms - P.E. Zafar, Y. Achenchabe, A. Bondu,
+    A. Cornuejols, V. Lemaire - DSAA 2021
     """
 
     def __init__(self,
                  misclassification_cost,
                  delay_cost,
-                 models_series_lengths,
+                 models_input_lengths,
                  nb_intervals=5,
                  aggregation_function='max'):
 
         self.misclassification_cost = misclassification_cost
         self.delay_cost = delay_cost
-        self.models_series_lengths = models_series_lengths
+        self.models_input_lengths = models_input_lengths
         self.nb_intervals = nb_intervals
         self.aggregation_function = aggregation_function
 
@@ -39,19 +96,32 @@ class EconomyGamma():
         return {
             "misclassification_cost": self.misclassification_cost,
             "delay_cost": self.delay_cost,
-            "models_series_lengths": self.models_series_lengths,
+            "models_input_lengths": self.models_input_lengths,
             "nb_intervals": self.nb_intervals,
             "aggregation_function": self.aggregation_function,
             "thresholds": self.thresholds,
             "transition_matrices": self.transition_matrices,
             "confusion_matrices": self.confusion_matrices,
             "classes_": self.classes_,
-            "multiclass": self.multiclass,
             "initial_cost": self.initial_cost,
+            "multiclass": self.multiclass,
         }
 
-    # Xpred shape (N, T, P), values = probability of each class according to the classifier
+
     def fit(self, X_pred, y, classes_=None):
+        """
+        Fit the trigger model based on the predictions probabilities obtained by classifying time series of progressive
+        lengths (using predict_proba on a second training set with a ChronologicalClassifier object).
+        Parameters:
+            X_pred: np.ndarray
+                Array of shape (N, T, P) with N the number of time series, T the number of input lengths that were
+                used for prediction and P the predicted class probabilities vectors.
+            y: np.ndarray
+                Array of N labels corresponding to the N time series predicted in X_pred.
+            classes_:
+                Array showing the names and order of classes, necessary to interpret the predictions contained in the
+                X_pred if they are not in order and the labels in y if they are non numerical.
+        """
 
         # DATA VALIDATION
         if isinstance(self.misclassification_cost, list):
@@ -66,18 +136,18 @@ class EconomyGamma():
             raise ValueError("Argument delay_cost is missing.")
         if not callable(self.delay_cost):
             raise TypeError("Argument delay_cost should be a function that returns a cost given a time series length.")
-        if isinstance(self.models_series_lengths, list):
-            self.models_series_lengths = np.array(self.models_series_lengths)
-        elif not isinstance(self.models_series_lengths, np.ndarray):
-            raise TypeError("Argument 'models_series_lengths' should be a 1D-array of positive int.")
-        if self.models_series_lengths.ndim != 1:
-            raise ValueError("Argument 'models_series_lengths' should be a 1D-array of positive int.")
-        for l in self.models_series_lengths:
+        if isinstance(self.models_input_lengths, list):
+            self.models_input_lengths = np.array(self.models_input_lengths)
+        elif not isinstance(self.models_input_lengths, np.ndarray):
+            raise TypeError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
+        if self.models_input_lengths.ndim != 1:
+            raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
+        for l in self.models_input_lengths:
             if l < 0:
-                raise ValueError("Argument 'models_series_lengths' should be a 1D-array of positive int.")
-        if len(np.unique(self.models_series_lengths)) != len(self.models_series_lengths):
-            self.models_series_lengths = np.unique(self.models_series_lengths)
-            warn("Removed duplicates timestamps in argument 'models_series_lengths'.")
+                raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
+        if len(np.unique(self.models_input_lengths)) != len(self.models_input_lengths):
+            self.models_input_lengths = np.unique(self.models_input_lengths)
+            warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
         if not isinstance(self.nb_intervals, int):
             raise TypeError("Argument nb_intervals should be a strictly positive int.")
         if self.nb_intervals < 1:
@@ -120,7 +190,7 @@ class EconomyGamma():
             raise TypeError("Argument classes_ should be a list of class labels in the oreder of the probabilities in X_pred")
 
         # ASSIGNMENTS
-        self.models_series_lengths = np.sort(self.models_series_lengths)
+        self.models_input_lengths = np.sort(self.models_input_lengths)
         if not callable(self.aggregation_function):
             self.aggregation_function = KNOWN_AGGREGATIONS[self.aggregation_function]
         else:
@@ -147,7 +217,7 @@ class EconomyGamma():
 
         # Obtain transition_matrices
         self.transition_matrices = [] # shape (T-1, K, K)
-        for t in range(len(self.models_series_lengths) - 1):
+        for t in range(len(self.models_input_lengths) - 1):
             self.transition_matrices.append(np.array([np.array([np.count_nonzero((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(self.nb_intervals)]) /
                                                       np.count_nonzero(X_intervals[t] == i) for i in range(self.nb_intervals)]))
         self.transition_matrices = np.nan_to_num(self.transition_matrices, nan=1/self.nb_intervals)  # fix nans created by division by 0 when not enough data
@@ -163,6 +233,27 @@ class EconomyGamma():
         return self
 
     def predict(self, X_pred, predicted_series_lengths):
+        """
+        Given a list of N predicted class probabilities vectors, predicts whether it is the right time to trigger the
+        prediction as well as the expected costs of delaying the decisions. Predictions which time series' input length
+        is not known by the trigger model are approximated to the last known length. In the case where it is below the
+        first known length, 'initial_cost' is used.
+
+        Parameters:
+            X_pred: numpy.ndarray
+                Array of N predicted class probabilities vectors obtained by predicting time series of different lengths.
+            predicted_series_lengths: numpy.ndarray
+                Array of int representing the input lengths of the time series associated to each predictions. Allows
+                the trigger model to determine which thresholds, transition matrices and confusions matrices to use.
+
+        Returns:
+            triggers: np.ndarray
+                Array of booleans representing whether it is the right time to trigger the decision for each predicted
+                time series.
+            costs: np.ndarray
+                Array of arrays representing the forecasted cost of delaying the decision until the number of
+                measurements reaches each one of the known input length for each time series prediction.
+        """
         X_pred = copy.deepcopy(X_pred)
         if isinstance(X_pred, list):
             X_pred = np.array(X_pred)
@@ -191,8 +282,8 @@ class EconomyGamma():
         predicted_series_lengths = np.array(predicted_series_lengths)
         truncated = False
         for i, pred_length in enumerate(predicted_series_lengths):
-            if pred_length not in self.models_series_lengths:
-                for length in self.models_series_lengths[::-1]:
+            if pred_length not in self.models_input_lengths:
+                for length in self.models_input_lengths[::-1]:
                     if length < pred_length:
                         predicted_series_lengths[i] = length
                         truncated = True
@@ -204,13 +295,13 @@ class EconomyGamma():
         # Get intervals given threshold : shape (N), values = group
         X_intervals = []
         for i, x in enumerate(X_aggregated):
-            if predicted_series_lengths[i] < np.min(self.models_series_lengths):
+            if predicted_series_lengths[i] < np.min(self.models_input_lengths):
                 interval = np.nan
             else:
                 interval = np.count_nonzero([threshold <= x for threshold
                                              in self.thresholds[
                                                  np.nonzero(
-                                                     self.models_series_lengths == predicted_series_lengths[i])[
+                                                     self.models_input_lengths == predicted_series_lengths[i])[
                                                      0][0]]])
                 X_intervals.append(interval)
 
@@ -222,9 +313,9 @@ class EconomyGamma():
             prediction_forecasted_costs = []
 
             # If series length is not covered return initial cost
-            if predicted_series_lengths[n] < np.min(self.models_series_lengths):
+            if predicted_series_lengths[n] < np.min(self.models_input_lengths):
                 prediction_forecasted_costs.append(self.initial_cost)
-                predicted_series_lengths[n] = np.min(self.models_series_lengths)
+                predicted_series_lengths[n] = np.min(self.models_input_lengths)
                 gamma = np.repeat(1 / self.nb_intervals, self.nb_intervals)
                 returned_priors = True
 
@@ -233,11 +324,11 @@ class EconomyGamma():
                 gamma[group] = 1
 
             # Estimate cost for each length from prediction length to max_length
-            for t in range(np.nonzero(self.models_series_lengths == predicted_series_lengths[n])[0][0], len(self.models_series_lengths)):
+            for t in range(np.nonzero(self.models_input_lengths == predicted_series_lengths[n])[0][0], len(self.models_input_lengths)):
                 misclassification_cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.misclassification_cost)
-                delay_cost = self.delay_cost(self.models_series_lengths[t])
+                delay_cost = self.delay_cost(self.models_input_lengths[t])
                 prediction_forecasted_costs.append(misclassification_cost + delay_cost)
-                if t != len(self.models_series_lengths) - 1:
+                if t != len(self.models_input_lengths) - 1:
                     gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
 
             # Save estimated costs and determine trigger time

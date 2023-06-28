@@ -9,56 +9,66 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 
 from warnings import warn
 
+# TODO : Multivariate data
+# TODO : Change feature extraction
+# TODO : Add calibration
+# TODO : deal with NaN in dataset ? (Although HGBoost is nan compatible)
+# TODO : Add set_params, Add setters in every class, compatibility setter in Early Classifier
+# TODO : Optimize decision threshold
+# TODO : Verbose, loadbar?
+# TODO : implement sparse matrix compatibility
+# TODO : check_estimator scikitlearn -> make estimator
+# TODO : create factory code?
+
 
 class ChronologicalClassifiers:
     """
-    A class used to manage a list of classifiers trained on time series of incrementing lengths following Scikit-Learn
-    conventions.
-    """
+    A class containing a list of classifiers to train on time series of incrementing lengths. Can be used along with a
+    trigger model object such as an EconomyGamma instance to do tasks of early classification.
 
-    # TODO : Multivariate data
-    # TODO : Change feature extraction
-    # TODO : Add calibration
-    # TODO : deal with NaN in dataset ? (Although HGBoost is nan compatible)
-    # TODO : Add set_params, Add setters in every class, compatibility setter in Early Classifier
-    # TODO : Optimize decision threshold
-    # TODO : Verbose, loadbar?
-    # TODO : implement sparse matrix compatibility
-    # TODO : check_estimator scikitlearn -> make estimator
-    # TODO : create factory code?
+    Parameters:
+            nb_classifiers: int, default=20
+                Number of classifiers to be trained. If the number is inferior to the number of measures in the training
+                time series, the models input lengths will be equally spaced from max_length/n_classifiers
+                to max_length.
+            base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
+                Classifier instance to be cloned and trained for each input length.
+            learned_timestamps_ratio: float, default=None
+                Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
+                Incompatible with parameters 'nb_classifiers', 'models_input_lengths' and 'classifiers'.
+            models_input_lengths: numpy.ndarray, default = None
+                Array containing the numbers of time measurements/input length that each classifier is trained on.
+                Argument 'nb_classifiers' is deduced from the length of this list.
+            classifiers: numpy.ndarray, default = None
+                List or array containing the classifier instances to be trained. Argument 'nb_classifiers' is deduced
+                from the length of this list.
+            feature_extraction: boolean, default=False TODO: Update this once a better feature extraction is implemented.
+                Boolean indicating whether to use the default feature extraction. Currently implemented feature
+                extraction is quite slow, wordy, does not work with time series with less than 12 measurements and does
+                not seem very effective. We do not recommend its use without experimentation.
+    Attributes:
+        class_prior: numpy.ndarray
+            Class prior probabilities vector obtained from the training set. The order of the classes is detailed in the
+            'classes_' argument
+        classes_:
+            Array containing the name of each classes ordered the same way as the 'class_prior' argument. Obtained from
+            the 'classes_' argument of the first classifier in the 'classifiers' list of the ChronologicalClassifiers
+            object.
+        max_series_length: int
+            Maximum number of measures contained by a time series in the training set.
+    """
 
     def __init__(self,
                  nb_classifiers=None,
                  base_classifier=None,
-                 learned_timestamps_ratio=None,  # learning_timestamps_ratio | learning_ratio_per_time_series | time_series_learning_ratio | learned_timestamps_ratio
-                 models_series_lengths=None,  # training_time_series_lengths | time_series_training_lengths | learned_time_series_lengths | models_input_lengths
+                 learned_timestamps_ratio=None,
+                 models_input_lengths=None,
                  classifiers=None,
-                 feature_extraction=True):
-        """
-        Parameters:
-             base_classifier: Instance of a classifier to be cloned and learned for each timestamp to be classified.
-                              Extreme gradient boosting (xgboost) is used by default.
-            learned_timestamps_ratio: Proportion of timestamps the object will learn models on given any training set.
-                              Attribute nb_classifiers is deduced from the time series' length in the training set.
-               nb_classifiers: Number of classifiers in the list.
-                              Attribute timestamps_ratio is deduced from the length of the training set.
-            classifiers: Custom list of classifiers to be used (might be fitted already)
-                              Attribute nb_classifiers is deduced to be the length of the custom_list.
-                              Attribute timestamps_ratio is deduced from the time series' length in the training set.
-        Attributes:
-            self.classifiers: List of classifiers.
-            self.models_series_length:
-            self.
-            self.base_classifier: Classifier to clone to get the classifiers in the list.
-            self.timestamps_ratio: Proportion of timestamps to learn models on given any training set.
-            self.nb_classifiers: Length of list.
-            self.registered_timestamps
-
-        """
+                 feature_extraction=False):  # TODO: make this True once a better feature extraction is implemented.
         self.nb_classifiers = nb_classifiers
         self.base_classifier = base_classifier
         self.learned_timestamps_ratio = learned_timestamps_ratio
-        self.models_series_lengths = models_series_lengths
+        self.models_input_lengths = models_input_lengths
         self.classifiers = classifiers
         self.feature_extraction = feature_extraction
 
@@ -71,26 +81,29 @@ class ChronologicalClassifiers:
     def get_params(self):
         return {
             "classifiers": self.classifiers,
-            "models_series_lengths": self.models_series_lengths,
+            "models_input_lengths": self.models_input_lengths,
             "base_classifier": self.base_classifier,
             "nb_classifiers": self.nb_classifiers,
             "learned_timestamps_ratio": self.learned_timestamps_ratio,
             "feature_extraction": self.feature_extraction,
             "class_prior": self.class_prior,
+            "classes_": self.classes_,
             "max_series_length": self.max_series_length,
-            "classes_": self.classes_
         }
 
     def fit(self, X, y, *args, **kwargs):
         """
-        Takes as input a training set x of matrix shape (N, T) and its corresponding labels as a list y of N elements,
+        Takes as input a training set X of matrix shape (N, T) and its corresponding labels as a list y of N elements,
         where N is the number of time series and T their commune complete length. This method fits every classifier
-        in the TimeIndexedClassifier object by historizing the training set into chronological subsets.
+        in the ChronologicalClassifiers object by cutting the time series to the input lengths indicated in argument
+        'models_input_lengths'. The prior probabilities are also learned.
         Parameters:
-            x: Training set of matrix shape (N, T) where:
+            X: np.ndarray
+            Training set of matrix shape (N, T) where:
                 N is the number of time series
                 T is the commune length of all complete time series
-            y: List of the N corresponding labels of the training set.
+            y: nd.ndarray
+            List of the N corresponding labels of the training set.
         """
         # INPUT VALIDATION / INTEGRITY
         # time_series_learning_ratio compatibility
@@ -104,8 +117,8 @@ class ChronologicalClassifiers:
             incompatible = []
             if self.nb_classifiers is not None:
                 incompatible.append('nb_classifiers')
-            if self.models_series_lengths is not None:
-                incompatible.append('time_series_training_lengths')
+            if self.models_input_lengths is not None:
+                incompatible.append('models_input_lengths')
             if self.classifiers is not None:
                 incompatible.append('classifiers')
             if len(incompatible) > 0:
@@ -133,22 +146,22 @@ class ChronologicalClassifiers:
                 raise ValueError("List argument 'classifiers' is empty.")
             equal.append(('classifiers', len(self.classifiers)))
 
-        if self.models_series_lengths is not None:
-            if isinstance(self.models_series_lengths, list):
-                self.models_series_lengths = np.array(self.models_series_lengths)
-            elif not isinstance(self.models_series_lengths, np.ndarray):
-                raise TypeError("Argument 'models_series_lengths' should be a list or array of positive int.")
-            if len(self.models_series_lengths) == 0:
-                raise ValueError("List argument 'models_series_lengths' is empty.")
-            for t in self.models_series_lengths:
+        if self.models_input_lengths is not None:
+            if isinstance(self.models_input_lengths, list):
+                self.models_input_lengths = np.array(self.models_input_lengths)
+            elif not isinstance(self.models_input_lengths, np.ndarray):
+                raise TypeError("Argument 'models_input_lengths' should be a list or array of positive int.")
+            if len(self.models_input_lengths) == 0:
+                raise ValueError("List argument 'models_input_lengths' is empty.")
+            for t in self.models_input_lengths:
                 if not isinstance(t, int):
-                    raise TypeError("Argument 'models_series_lengths' should be a list or array of positive int.")
+                    raise TypeError("Argument 'models_input_lengths' should be a list or array of positive int.")
                 if t < 0:
-                    raise ValueError("Argument 'models_series_lengths' should be a list or array of positive int.")
-            if len(np.unique(self.models_series_lengths)) != len(self.models_series_lengths):
-                self.models_series_lengths = np.unique(self.models_series_lengths)
-                warn("Removed duplicates timestamps in argument 'models_series_lengths'.")
-            equal.append(('models_series_lengths', len(self.models_series_lengths)))
+                    raise ValueError("Argument 'models_input_lengths' should be a list or array of positive int.")
+            if len(np.unique(self.models_input_lengths)) != len(self.models_input_lengths):
+                self.models_input_lengths = np.unique(self.models_input_lengths)
+                warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
+            equal.append(('models_input_lengths', len(self.models_input_lengths)))
 
         if len(equal) >= 2:
             for i in range(len(equal) - 1):
@@ -190,8 +203,8 @@ class ChronologicalClassifiers:
         if self.nb_classifiers is None:
             if self.classifiers is not None:
                 self.nb_classifiers = len(self.classifiers)
-            elif self.models_series_lengths is not None:
-                self.nb_classifiers = len(self.models_series_lengths)
+            elif self.models_input_lengths is not None:
+                self.nb_classifiers = len(self.models_input_lengths)
             elif self.learned_timestamps_ratio is not None:
                 self.nb_classifiers = int(self.learned_timestamps_ratio * self.max_series_length)
                 if self.nb_classifiers == 0:
@@ -200,7 +213,7 @@ class ChronologicalClassifiers:
                 self.nb_classifiers = 20
                 print("Using 'nb_classifiers=20 by default.")
         if self.nb_classifiers > self.max_series_length:
-            if self.classifiers is not None or self.models_series_lengths is not None:
+            if self.classifiers is not None or self.models_input_lengths is not None:
                 raise ValueError(f"Not enough timestamps to learn {self.nb_classifiers} classifiers on")
             self.nb_classifiers = self.max_series_length
             warn(f"Not enough timestamps to learn {self.nb_classifiers} classifiers on. Changing number of classifiers "
@@ -211,22 +224,22 @@ class ChronologicalClassifiers:
             if self.classifiers is None:
                 self.base_classifier = HistGradientBoostingClassifier()
                 print("Using 'base_classifier = sklearn.ensemble.HistGradientBoostingClassifier() by default.")
-        if self.models_series_lengths is None:
-            self.models_series_lengths = np.array([int(self.max_series_length * (i + 1) / self.nb_classifiers) for i in
-                                                   range(self.nb_classifiers)])
+        if self.models_input_lengths is None:
+            self.models_input_lengths = np.array([int(self.max_series_length * (i + 1) / self.nb_classifiers) for i in
+                                                  range(self.nb_classifiers)])
         else:
-            self.models_series_lengths = np.sort(self.models_series_lengths)
+            self.models_input_lengths = np.sort(self.models_input_lengths)
         if self.classifiers is None:
             self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.nb_classifiers)]
 
-        # Feature extraction and fitting
-        for i, ts_length in enumerate(self.models_series_lengths):
+        # FEATURE EXTRACTION AND FITTING
+        for i, ts_length in enumerate(self.models_input_lengths):
             Xt = X[:, :ts_length]
             if self.feature_extraction:
                 Xt = extract_features(Xt)
             self.classifiers[i].fit(Xt, y, *args, **kwargs)
 
-        # Getting prior_probabilities
+        # GETTING PRIOR PROBABILITIES
         try:
             self.classes_ = self.classifiers[0].classes_
             self.class_prior = np.array([np.count_nonzero(y == class_) / len(y) for class_ in self.classes_])
@@ -235,6 +248,19 @@ class ChronologicalClassifiers:
         return self
 
     def predict(self, X):
+        """
+        Predict a dataset of time series of various lengths using the right classifier in the ChronologicalClassifiers
+        object. If a time series has a different number of measurements than the values in 'models_input_lengths', the
+        time series is truncated to the closest compatible length. If its length is shorter than the first length in
+        'models_input_lengths', the prior probabilities are used. Returns the most probable class of each series.
+        Parameters:
+            X: np.ndarray
+            Dataset of time series of various sizes to predict. An array of size (N*max_T) where N is the number of
+            time series, max_T the max number of measurements in a time series and where empty values are filled with
+            nan. Can also be a pandas DataFrame or a list of lists.
+        Returns:
+            np.ndarray containing the classifier predicted class for each time series in the dataset.
+        """
         X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
@@ -255,8 +281,8 @@ class ChronologicalClassifiers:
         # Truncate time series to classifier compatible length
         truncated = False
         for i, time_series in enumerate(X):
-            if time_series_lengths[i] not in self.models_series_lengths:
-                for length in self.models_series_lengths[::-1]:
+            if time_series_lengths[i] not in self.models_input_lengths:
+                for length in self.models_input_lengths[::-1]:
                     if length < time_series_lengths[i]:
                         X[i][length:] = np.nan
                         time_series_lengths[i] = length
@@ -274,23 +300,35 @@ class ChronologicalClassifiers:
         predictions = []
         returned_priors = False
         for i, time_series in enumerate(X):
-            if time_series_lengths[i] < self.models_series_lengths[0]:
+            if time_series_lengths[i] < self.models_input_lengths[0]:
                 predictions.append(self.classes_[np.argmax(self.class_prior)])
                 returned_priors = True
             else:
                 predictions.append(
-                    self.classifiers[np.nonzero(self.models_series_lengths == time_series_lengths[i])[0][0]]
+                    self.classifiers[np.nonzero(self.models_input_lengths == time_series_lengths[i])[0][0]]
                     .predict([time_series[:inputs_lengths[i]]])[0])
 
         # Send warnings if necessary
         if truncated:
             warn("Some time series were truncated during prediction since no classifier was fitted for their lengths.")
         if returned_priors:
-            warn("Some time series could not be predicted since their length was below that of the training timestamps "
-                 "of the first fitted classifier.")
+            warn("Some time series are of insufficient length for prediction; returning prior probabilities instead.")
         return np.array(predictions)
 
     def predict_proba(self, X):
+        """
+        Predict a dataset of time series of various lengths using the right classifier in the ChronologicalClassifiers
+        object. If a time series has a different number of measurements than the values in 'models_input_lengths', the
+        time series is truncated to the closest compatible length. If its length is shorter than the first length in
+        'models_input_lengths', the prior probabilities are used. Returns the class probabilities vector of each series.
+        Parameters:
+            X: np.ndarray
+            Dataset of time series of various sizes to predict. An array of size (N*max_T) where N is the number of
+            time series, max_T the max number of measurements in a time series and where empty values are filled with
+            nan. Can also be a pandas DataFrame or a list of lists.
+        Returns:
+            np.ndarray containing the classifier class probabilities array for each time series in the dataset.
+        """
         X = copy.deepcopy(X)
         # Validate X format
         if isinstance(X, list):
@@ -309,8 +347,8 @@ class ChronologicalClassifiers:
         # Truncate time series to classifier compatible length
         truncated = False
         for i, time_series in enumerate(X):
-            if time_series_lengths[i] not in self.models_series_lengths:
-                for length in self.models_series_lengths[::-1]:
+            if time_series_lengths[i] not in self.models_input_lengths:
+                for length in self.models_input_lengths[::-1]:
                     if length < time_series_lengths[i]:
                         X[i][length:] = np.nan
                         time_series_lengths[i] = length
@@ -328,28 +366,60 @@ class ChronologicalClassifiers:
         predictions = []
         returned_priors = False
         for i, time_series in enumerate(X):
-            if time_series_lengths[i] < self.models_series_lengths[0]:
+            if time_series_lengths[i] < self.models_input_lengths[0]:
                 predictions.append(self.class_prior)
                 returned_priors = True
             else:
                 predictions.append(
-                    self.classifiers[np.nonzero(self.models_series_lengths == time_series_lengths[i])[0][0]]
+                    self.classifiers[np.nonzero(self.models_input_lengths == time_series_lengths[i])[0][0]]
                     .predict_proba([time_series[:inputs_lengths[i]]])[0])
 
         # Send warnings if necessary
         if truncated:
             warn("Some time series were truncated during prediction since no classifier was fitted for their lengths.")
         if returned_priors:
-            warn("Some time series could not be predicted since their length was below that of the training timestamps "
-                 "of the first fitted classifier.")
+            warn("Some time series are of insufficient length for prediction; returning prior probabilities instead.")
         return np.array(predictions)
 
 
 class EarlyClassifier:
     """
-    Combines a time-indexed array of classifiers with a trigger model to allow for simple early classification.
-    Supports both predictions and triggering.
-    May not support custom classifiers with unconventional methods names or structure.
+    Objects that can predict the class of an incomplete time series as well as the best time to trigger the decision as
+    a time series is revealed to allow for early classification tasks.
+    Combines a ChronologicalCLassifier instance and a trigger model (EconomyGamma instance by default). These objects
+    can be used separately if a more technical use is needed.
+
+    Parameters:
+        misclassification_cost: numpy.ndarray
+            Array of size Y*Y where Y is the number of classes and where each value at indices
+            [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
+            matrix will be all zeros. This cost must be defined by a domain expert and be expressed in the same unit
+            as the delay cost.
+        delay_cost: python function
+                Function that takes as input a time series input length and returns the timely cost of waiting
+                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
+                be expressed in the same unit as the misclassification cost.
+        nb_classifiers: int, default=20
+                Number of classifiers to be trained. If the number is inferior to the number of measures in the training
+                time series, the models input lengths will be equally spaced from max_length/n_classifiers
+                to max_length.
+        nb_intervals: int, default=5
+                Number of groups to aggregate the training time series to for each input length during learning of the
+                trigger model. The optimal value of this hyperparameter may depend on the task.
+        base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
+                Classifier instance to be cloned and trained for each input length.
+        learned_timestamps_ratio: float, default=None
+                Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
+                Incompatible with parameters 'nb_classifiers'
+        chronological_classifiers: ChronologicalClassifier()
+            Instance of the ChronologicalClassifier object used in combination with the trigger model.
+        trigger_model: EconomyGamma()
+            Instance of the EconomyGamma() object used in combination with the chronological classifiers.
+
+    Attributes:
+        All attributes of the instance can be accessed from their 'chronological_classifiers' and 'trigger_model'
+        objects.
+        Check documentation of ChronologicalClassifiers and EconomyGamma for more detail on these attributes.
     """
     def __init__(self,
                  misclassification_cost,
@@ -358,20 +428,14 @@ class EarlyClassifier:
                  nb_intervals=5,
                  base_classifier=HistGradientBoostingClassifier(),
                  learned_timestamps_ratio=None,
-                 feature_extraction=True,  # TODO: delete this once a better feature extraction is implemented
                  chronological_classifiers=None,
                  trigger_model=None):
-        # models_series_lengths=None,
-        # classifiers=None,
-        # feature_extraction=True,
-        # aggregation_function='max',
         self._misclassification_cost = misclassification_cost
         self._delay_cost = delay_cost
         self._nb_classifiers = nb_classifiers
         self._learned_timestamps_ratio = learned_timestamps_ratio
         self._base_classifier = base_classifier
         self._nb_intervals = nb_intervals
-        self._feature_extraction = feature_extraction
         self.chronological_classifiers = chronological_classifiers
         self.trigger_model = trigger_model
 
@@ -426,7 +490,7 @@ class EarlyClassifier:
     def get_params(self):
         return {
             "classifiers": self.chronological_classifiers.classifiers,
-            "models_series_lengths": self.chronological_classifiers.models_series_lengths,
+            "models_input_lengths": self.chronological_classifiers.models_input_lengths,
             "base_classifier": self.chronological_classifiers.base_classifier,
             "nb_classifiers": self.chronological_classifiers.nb_classifiers,
             "learned_timestamps_ratio": self.chronological_classifiers.learned_timestamps_ratio,
@@ -451,16 +515,24 @@ class EarlyClassifier:
 
     def _fit_trigger_model(self, X, y):
         X_pred = np.stack([self.chronological_classifiers.predict_proba(X[:, :length])
-                           for length in self.chronological_classifiers.models_series_lengths], axis=1)
+                           for length in self.chronological_classifiers.models_input_lengths], axis=1)
         self.trigger_model.fit(X_pred, y, self.chronological_classifiers.classes_)
 
     def fit(self, X, y, val_proportion=.5):
+        """
+        X: np.ndarray
+            Training set of matrix shape (N, T) where:
+                N is the number of time series
+                T is the commune length of all complete time series
+            y: nd.ndarray
+            List of the N corresponding labels of the training set.
+        """
 
         if not isinstance(X, list) and not isinstance(X, np.ndarray) and not isinstance(X, pd.DataFrame):
             raise TypeError("X should be a 2-dimensional list, array or DataFrame of size (N, T) with N the number "
                             "of examples and T the number of timestamps.")
 
-        val_index = int(len(X) * val_proportion)
+        val_index = int(len(X) * (1-val_proportion))
 
         if self.chronological_classifiers is not None:
             if not isinstance(self.chronological_classifiers, ChronologicalClassifiers):
@@ -469,8 +541,7 @@ class EarlyClassifier:
         else:
             self.chronological_classifiers = ChronologicalClassifiers(self._nb_classifiers,
                                                                       self._base_classifier,
-                                                                      self._learned_timestamps_ratio,
-                                                                      feature_extraction=self._feature_extraction)
+                                                                      self._learned_timestamps_ratio)
 
         self._fit_classifiers(X[:val_index], y[:val_index])
 
@@ -480,13 +551,34 @@ class EarlyClassifier:
                     "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
         else:
             self.trigger_model = EconomyGamma(self._misclassification_cost, self._delay_cost,
-                                              self.chronological_classifiers.models_series_lengths, self._nb_intervals)
+                                              self.chronological_classifiers.models_input_lengths, self._nb_intervals)
 
         self._fit_trigger_model(X[val_index:], y[val_index:])
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
         return self
 
     def predict(self, X):
+        """
+        Predicts the class, class probabilites vectors, trigger indication and expected costs of the time series
+        contained in X.
+        Parameters:
+             X: np.ndarray
+                Dataset of time series of various sizes to predict. An array of size (N*max_T) where N is the number of
+                time series, max_T the max number of measurements in a time series and where empty values are filled with
+                nan. Can also be a pandas DataFrame or a list of lists.
+        Returns:
+            classes: np.ndarray:
+                Array containing the predicted class of each time series in X.
+            probas: np.ndarray
+                Array containing the predicted class probabilities vectors of each time series in X.
+            triggers: np.ndarray
+                Array of booleans indicating whether to trigger the decision immediately with the current prediction
+                (True) or to wait for more data (False) for each time series in X.
+            costs: np.ndarray
+                Array of arrays containing the expected costs of waiting longer for each predicted next measurement for
+                each time series in X. Using argmin on each row outputs the number of timestamps to wait for until the
+                next expected trigger indication.
+        """
 
         X = copy.deepcopy(X)
         # Validate X format
