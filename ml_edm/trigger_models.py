@@ -33,7 +33,7 @@ class EconomyGamma:
                 Input lengths for which a transition matrix and confusion matrix and thresholds are computed. These
                 numbers of measurements/timestamps should be the same as for the trained chronological classifiers.
             nb_intervals: int, default=5
-                Number of groups to aggregate the training time series to for each input length during learning of the
+                Number of groups to aggregate the training time series into for each input length during learning of the
                 trigger model. The optimal value of this hyperparameter may depend on the task.
             aggregation_function: function/string. default='max'
                 Function to aggregate the probabilities of each class for each time series prediction in the multiclass
@@ -354,36 +354,7 @@ class EconomyGamma:
     def predict_on_optimal_cost(self, x_pred, y, timestamps):
         return trigger_time, trigger, cost, forecasted_trigger, forecasted_costs"""
 
-
-"""class EconomyK(NonMyopicTriggerModel):
-    """"""
-    A non-myopic trigger model based on the economy architecture for early time series classification. Allows the
-    anticipation of future decision costs based on an unsupervised grouping of time series with kmeans and user-defined
-    costs for delay and misclassification. Trigger models aim to determine the best time to trigger a decision given
-    evolving time series.
-    Introduced in :
-    Early classification of time series, cost-based optimization criterion and algorithms - Y. Achenchabe, A. Bondu,
-    A. Cornuejols, A. Dachraoui - Machine Learning 2021
-    """"""
-    def __init__(self, nb_groups=0, misclassification_cost, delay_cost):
-        super().__init__()
-        self.nb_groups = nb_groups
-        self.misclassification_cost = misclassification_cost
-        self.delay_cost = delay_cost
-
-    def fit(self, x, x_preds, y):
-        return self
-
-    def predict(self, x, timestamps):
-        return trigger, cost, forecasted_trigger, forecasted_costs
-
-    def predict_on_first_trigger(self, x, timestamps):
-        return trigger_time, cost, forecasted_costs
-
-    def predict_on_optimal_cost(self, x, y, timestamps):
-        return trigger_time, trigger, cost, forecasted_trigger, forecasted_costs
-
-
+"""
 class StoppingRule(TriggerModel):
     """"""
     # TODO

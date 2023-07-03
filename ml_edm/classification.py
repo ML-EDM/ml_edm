@@ -386,7 +386,7 @@ class EarlyClassifier:
     """
     Objects that can predict the class of an incomplete time series as well as the best time to trigger the decision as
     a time series is revealed to allow for early classification tasks.
-    Combines a ChronologicalCLassifier instance and a trigger model (EconomyGamma instance by default). These objects
+    Combines a ChronologicalClassifier instance and a trigger model (EconomyGamma instance by default). These objects
     can be used separately if a more technical use is needed.
 
     Parameters:
@@ -404,7 +404,7 @@ class EarlyClassifier:
                 time series, the models input lengths will be equally spaced from max_length/n_classifiers
                 to max_length.
         nb_intervals: int, default=5
-                Number of groups to aggregate the training time series to for each input length during learning of the
+                Number of groups to aggregate the training time series into for each input length during learning of the
                 trigger model. The optimal value of this hyperparameter may depend on the task.
         base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
                 Classifier instance to be cloned and trained for each input length.
@@ -520,12 +520,15 @@ class EarlyClassifier:
 
     def fit(self, X, y, val_proportion=.5):
         """
-        X: np.ndarray
-            Training set of matrix shape (N, T) where:
+        Parameters:
+            X: np.ndarray
+                Training set of matrix shape (N, T) where:
                 N is the number of time series
                 T is the commune length of all complete time series
             y: nd.ndarray
-            List of the N corresponding labels of the training set.
+                List of the N corresponding labels of the training set.
+            val_proportion: float
+                Value between 0 and 1 representing the proportion of data to be used by the trigger_model for training.
         """
 
         if not isinstance(X, list) and not isinstance(X, np.ndarray) and not isinstance(X, pd.DataFrame):

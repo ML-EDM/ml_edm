@@ -4,7 +4,16 @@ from pandas import DataFrame
 from warnings import warn
 
 
-def get_time_series_lengths(X): #takes np array as input
+def get_time_series_lengths(X):
+    """
+    Parameters:
+        X: numpy.ndarray
+            An array of size (N*max_T) where N is the number of time series, max_T the max number of measurements in a
+            time series and where empty values are filled with nan. Can also be a pandas DataFrame or a list of lists.
+    Returns:
+        A numpy array containing the index of the last numerical value+1 for each row in X, corresponding to the length
+        of each time series.
+    """
     not_nan_coordinates = np.nonzero(np.logical_not(np.isnan(X)))
     not_nan_count_per_row = np.unique(not_nan_coordinates[0], return_counts=True)[1]
     not_nan_indices_per_row = np.split(not_nan_coordinates[1], np.cumsum(not_nan_count_per_row)[:-1])
