@@ -237,6 +237,7 @@ class ChronologicalClassifiers:
             Xt = X[:, :ts_length]
             if self.feature_extraction:
                 Xt = extract_features(Xt)
+            print(f"FITTING CLASSIFIER {i+1}/{self.nb_classifiers} FOR TIMESTAMP {self.models_input_lengths[i]} ")
             self.classifiers[i].fit(Xt, y, *args, **kwargs)
 
         # GETTING PRIOR PROBABILITIES

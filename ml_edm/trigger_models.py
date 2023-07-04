@@ -107,7 +107,6 @@ class EconomyGamma:
             "multiclass": self.multiclass,
         }
 
-
     def fit(self, X_pred, y, classes_=None):
         """
         Fit the trigger model based on the predictions probabilities obtained by classifying time series of progressive
@@ -171,6 +170,9 @@ class EconomyGamma:
         if X_pred.ndim != 3:
             raise ValueError("X_pred should be a 3-dimensional list, array or DataFrame of size (N, T, Z) with N the number "
                              "of examples, T the number of timestamps and Z the number of classes probabilities.")
+        if X_pred.shape[2] != self.misclassification_cost.shape[0]:
+            raise ValueError("X_pred probability vectors should have the same number of classes as the "
+                             "misclassification_cost matrix.")
         if len(X_pred) == 0:
             raise ValueError("Dataset 'X_pred' to fit trigger_model on is empty.")
         for i in range(len(X_pred)):

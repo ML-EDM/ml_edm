@@ -20,8 +20,23 @@ def get_time_series_lengths(X):
     return np.array([np.max(array) + 1 for array in not_nan_indices_per_row])
 
 
-def extract_features(X):
+def extract_features(X):  # TODO: Replace with a better feature extraction.
+    """
+    Uses the tsfel library to perform feature extraction on a dataset of time series.
+    Feature extraction is quite slow, wordy, does not work with time series with less than 12 measurements and does not
+    seem very effective. We do not recommend its use without experimentation yet.
 
+    Parameters:
+        X: ndarray
+            Dataset of time series of various sizes to extract features from. An array of size (N*max_T) where N is the
+            number of time series, max_T the max number of measurements in a time series and where empty values are filled
+            with nan. Can also be a pandas DataFrame or a list of lists.
+    Returns:
+        X_concat: ndarray
+         Array of size (N, max_T+max_F)  where N is the number of time series, max_T the max number of measurements in a
+          time series and max_F is the max number of extracted features. This dataset is obtained by concatenating the
+          extracted features to the original time series for each line. Empty values are filled with nan.
+    """
     if isinstance(X, list):
         max_series_length = np.max([len(time_series) for time_series in X])
         padding = np.full((len(X), max_series_length), np.nan)
