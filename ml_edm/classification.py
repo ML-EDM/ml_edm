@@ -154,7 +154,7 @@ class ChronologicalClassifiers:
             if len(self.models_input_lengths) == 0:
                 raise ValueError("List argument 'models_input_lengths' is empty.")
             for t in self.models_input_lengths:
-                if not isinstance(t, int):
+                if not isinstance(t, np.int32):
                     raise TypeError("Argument 'models_input_lengths' should be a list or array of positive int.")
                 if t < 0:
                     raise ValueError("Argument 'models_input_lengths' should be a list or array of positive int.")
@@ -237,7 +237,6 @@ class ChronologicalClassifiers:
             Xt = X[:, :ts_length]
             if self.feature_extraction:
                 Xt = extract_features(Xt)
-            print(f"FITTING CLASSIFIER {i+1}/{self.nb_classifiers} FOR TIMESTAMP {self.models_input_lengths[i]} ")
             self.classifiers[i].fit(Xt, y, *args, **kwargs)
 
         # GETTING PRIOR PROBABILITIES
