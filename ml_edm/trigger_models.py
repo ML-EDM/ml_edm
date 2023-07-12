@@ -11,6 +11,39 @@ def gini(probas):
 KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
 
+def create_cost_matrices(models_input_lengths, misclassification_cost, delay_cost=None):
+
+    # Input validation: models_input_lengths
+    if isinstance(models_input_lengths, list):
+        models_input_lengths = np.array(models_input_lengths)
+    elif not isinstance(models_input_lengths, np.ndarray):
+        raise TypeError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
+    if models_input_lengths.ndim != 1:
+        raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
+    for l in models_input_lengths:
+        if l < 0:
+            raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
+    if len(np.unique(models_input_lengths)) != len(models_input_lengths):
+        models_input_lengths = np.unique(models_input_lengths)
+        warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
+    # Input validation: misclassification_cost
+    if isinstance(misclassification_cost, list):
+        misclassification_cost = np.array(misclassification_cost)
+    elif not isinstance(misclassification_cost, np.ndarray):
+        raise TypeError(
+            "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
+    if misclassification_cost.ndim != 2 or misclassification_cost.shape[0] != \
+            misclassification_cost.shape[1]:
+        raise ValueError(
+            "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
+    # Input Validation: delay_cost
+    if delay_cost is None:
+        return np.repeat(misclassification_cost[None, :], len(models_input_lengths), axis=0)
+    if not callable(delay_cost):
+        raise TypeError("Argument delay_cost should be a function that returns a cost given a time series length.")
+    return np.array([misclassification_cost + delay_cost(timestamp) for timestamp in models_input_lengths])
+
+
 class EconomyGamma:
     """
     A highly performing non-myopic trigger model based on the economy architecture for early time series classification.
@@ -80,22 +113,19 @@ class EconomyGamma:
     """
 
     def __init__(self,
-                 misclassification_cost,
-                 delay_cost,
+                 cost_matrices,
                  models_input_lengths,
                  nb_intervals=5,
                  aggregation_function='max'):
 
-        self.misclassification_cost = misclassification_cost
-        self.delay_cost = delay_cost
+        self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
         self.nb_intervals = nb_intervals
         self.aggregation_function = aggregation_function
 
     def get_params(self):
         return {
-            "misclassification_cost": self.misclassification_cost,
-            "delay_cost": self.delay_cost,
+            "cost_matrices": self.cost_matrices,
             "models_input_lengths": self.models_input_lengths,
             "nb_intervals": self.nb_intervals,
             "aggregation_function": self.aggregation_function,
@@ -123,18 +153,14 @@ class EconomyGamma:
         """
 
         # DATA VALIDATION
-        if isinstance(self.misclassification_cost, list):
-            self.misclassification_cost = np.array(self.misclassification_cost)
-        elif not isinstance(self.misclassification_cost, np.ndarray):
+        if isinstance(self.cost_matrices, list):
+            self.cost_matrices = np.array(self.cost_matrices)
+        elif not isinstance(self.cost_matrices, np.ndarray):
             raise TypeError(
-                "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
-        if self.misclassification_cost.ndim != 2 or self.misclassification_cost.shape[0] != self.misclassification_cost.shape[1]:
+                "Argument 'cost_matrices' should be an array of shape (T, Y,Y) with T the number of timestamps and Y the number of clases.")
+        if self.cost_matrices.ndim != 3 or self.cost_matrices.shape[1] != self.cost_matrices.shape[2]:
             raise ValueError(
-                "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
-        if self.misclassification_cost is None:
-            raise ValueError("Argument delay_cost is missing.")
-        if not callable(self.delay_cost):
-            raise TypeError("Argument delay_cost should be a function that returns a cost given a time series length.")
+                "Argument 'cost_matrices' should be an array of shape (T, Y,Y) with T the number of timestamps and Y the number of clases.")
         if isinstance(self.models_input_lengths, list):
             self.models_input_lengths = np.array(self.models_input_lengths)
         elif not isinstance(self.models_input_lengths, np.ndarray):
@@ -147,6 +173,8 @@ class EconomyGamma:
         if len(np.unique(self.models_input_lengths)) != len(self.models_input_lengths):
             self.models_input_lengths = np.unique(self.models_input_lengths)
             warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
+        if self.models_input_lengths.shape[0] != self.cost_matrices.shape[0]:
+            raise ValueError("Argument 'cost_matrices' should have as many matrices as there are values in argument 'models_input_lengths'.")
         if not isinstance(self.nb_intervals, int):
             raise TypeError("Argument nb_intervals should be a strictly positive int.")
         if self.nb_intervals < 1:
@@ -170,9 +198,9 @@ class EconomyGamma:
         if X_pred.ndim != 3:
             raise ValueError("X_pred should be a 3-dimensional list, array or DataFrame of size (N, T, Z) with N the number "
                              "of examples, T the number of timestamps and Z the number of classes probabilities.")
-        if X_pred.shape[2] != self.misclassification_cost.shape[0]:
+        if X_pred.shape[2] != self.cost_matrices.shape[1]:
             raise ValueError("X_pred probability vectors should have the same number of classes as the "
-                             "misclassification_cost matrix.")
+                             "cost matrices.")
         if len(X_pred) == 0:
             raise ValueError("Dataset 'X_pred' to fit trigger_model on is empty.")
         for i in range(len(X_pred)):
@@ -203,7 +231,7 @@ class EconomyGamma:
         y = np.array([np.nonzero(self.classes_ == y_)[0][0] for y_ in y])
         prior_class_prediction = np.argmax(np.unique(y, return_counts=True)[1])
         # TODO: verify there is no pathological behaviour linked to using initial_cost
-        self.initial_cost = np.sum(np.unique(y, return_counts=True)[1]/y.shape[0] * self.misclassification_cost[:,prior_class_prediction]) + self.delay_cost(0)
+        self.initial_cost = np.sum(np.unique(y, return_counts=True)[1]/y.shape[0] * self.cost_matrices[0,:,prior_class_prediction])
         self.multiclass = False if len(self.classes_) <= 2 else True
 
         # Aggregate values if multiclass : shape (N, T), values = aggregated value or 1st class proba
@@ -327,9 +355,8 @@ class EconomyGamma:
 
             # Estimate cost for each length from prediction length to max_length
             for t in range(np.nonzero(self.models_input_lengths == predicted_series_lengths[n])[0][0], len(self.models_input_lengths)):
-                misclassification_cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.misclassification_cost)
-                delay_cost = self.delay_cost(self.models_input_lengths[t])
-                prediction_forecasted_costs.append(misclassification_cost + delay_cost)
+                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t])
+                prediction_forecasted_costs.append(cost)
                 if t != len(self.models_input_lengths) - 1:
                     gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
 

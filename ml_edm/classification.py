@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from dataset import extract_features, get_time_series_lengths
-from trigger_models import EconomyGamma
+from trigger_models import EconomyGamma, create_cost_matrices
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 
@@ -430,30 +430,14 @@ class EarlyClassifier:
                  learned_timestamps_ratio=None,
                  chronological_classifiers=None,
                  trigger_model=None):
-        self._misclassification_cost = misclassification_cost
-        self._delay_cost = delay_cost
+        self.misclassification_cost = misclassification_cost
+        self.delay_cost = delay_cost
         self._nb_classifiers = nb_classifiers
         self._learned_timestamps_ratio = learned_timestamps_ratio
         self._base_classifier = base_classifier
         self._nb_intervals = nb_intervals
         self.chronological_classifiers = chronological_classifiers
         self.trigger_model = trigger_model
-
-    @property
-    def misclassification_cost(self):
-        return self.trigger_model.misclassification_cost
-
-    @misclassification_cost.setter
-    def misclassification_cost(self, value):
-        self.misclassification_cost = value
-
-    @property
-    def delay_cost(self):
-        return self.trigger_model.delay_cost
-
-    @delay_cost.setter
-    def delay_cost(self, value):
-        self.delay_cost = value
 
     @property
     def nb_classifiers(self):
@@ -494,8 +478,9 @@ class EarlyClassifier:
             "base_classifier": self.chronological_classifiers.base_classifier,
             "nb_classifiers": self.chronological_classifiers.nb_classifiers,
             "learned_timestamps_ratio": self.chronological_classifiers.learned_timestamps_ratio,
-            "misclassification_cost": self.trigger_model.misclassification_cost,
-            "delay_cost": self.trigger_model.delay_cost,
+            "misclassification_cost": self.misclassification_cost,
+            "delay_cost": self.delay_cost,
+            "cost_matrices": self.trigger_model.cost_matrices,
             "nb_intervals": self.trigger_model.nb_intervals,
             "aggregation_function": self.trigger_model.aggregation_function,
             "thresholds": self.trigger_model.thresholds,
@@ -553,8 +538,10 @@ class EarlyClassifier:
                 raise ValueError(
                     "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
         else:
-            self.trigger_model = EconomyGamma(self._misclassification_cost, self._delay_cost,
-                                              self.chronological_classifiers.models_input_lengths, self._nb_intervals)
+            cost_matrices = create_cost_matrices(self.chronological_classifiers.models_input_lengths,
+                                                 self.misclassification_cost, self.delay_cost)
+            self.trigger_model = EconomyGamma(cost_matrices, self.chronological_classifiers.models_input_lengths,
+                                              self._nb_intervals)
 
         self._fit_trigger_model(X[val_index:], y[val_index:])
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
