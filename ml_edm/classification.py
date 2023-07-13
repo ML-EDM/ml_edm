@@ -393,24 +393,23 @@ class EarlyClassifier:
         misclassification_cost: numpy.ndarray
             Array of size Y*Y where Y is the number of classes and where each value at indices
             [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
-            matrix will be all zeros. This cost must be defined by a domain expert and be expressed in the same unit
+            matrix are all zeros. This cost must be defined by a domain expert and be expressed in the same unit
             as the delay cost.
         delay_cost: python function
-                Function that takes as input a time series input length and returns the timely cost of waiting
-                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
-                be expressed in the same unit as the misclassification cost.
+            Function that takes as input a time series input length and returns the timely cost of waiting
+            to obtain such number of measurements given the task. This cost must be defined by a domain expert and
+            be expressed in the same unit as the misclassification cost.
         nb_classifiers: int, default=20
-                Number of classifiers to be trained. If the number is inferior to the number of measures in the training
-                time series, the models input lengths will be equally spaced from max_length/n_classifiers
-                to max_length.
+            Number of classifiers to be trained. If the number is inferior to the number of measures in the training
+            time series, the models input lengths will be equally spaced from max_length/n_classifiers to max_length.
         nb_intervals: int, default=5
-                Number of groups to aggregate the training time series into for each input length during learning of the
-                trigger model. The optimal value of this hyperparameter may depend on the task.
+            Number of groups to aggregate the training time series into for each input length during learning of the
+            trigger model. The optimal value of this hyperparameter may depend on the task.
         base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
                 Classifier instance to be cloned and trained for each input length.
         learned_timestamps_ratio: float, default=None
-                Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
-                Incompatible with parameters 'nb_classifiers'
+            Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
+            Incompatible with parameters 'nb_classifiers'
         chronological_classifiers: ChronologicalClassifier()
             Instance of the ChronologicalClassifier object used in combination with the trigger model.
         trigger_model: EconomyGamma()

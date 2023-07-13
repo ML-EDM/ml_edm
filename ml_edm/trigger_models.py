@@ -11,20 +11,38 @@ def gini(probas):
 KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
 
-def create_cost_matrices(models_input_lengths, misclassification_cost, delay_cost=None):
+def create_cost_matrices(timestamps, misclassification_cost, delay_cost=None):
+    """
+    A function that converts a separated misclassification matrix and a delay cost function to an array of cost_matrices
+    along time given a series of timestamps for EconomyGamma.
+
+    Parameters:
+        timestamps: numpy.ndarray
+            Array of int representing the timestamps / time series input length, to create cost_matrices for.
+        misclassification_cost: numpy.ndarray
+            Array of size Y*Y where Y is the number of classes and where each value at indices
+            [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
+            matrix are all zeros. This cost must be defined by a domain expert and be expressed in the same unit
+            as the delay cost.
+        delay_cost: python function, default=None
+                Function that takes as input a time series input length and returns the timely cost of waiting
+                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
+                be expressed in the same unit as the misclassification cost.
+
+    """
 
     # Input validation: models_input_lengths
-    if isinstance(models_input_lengths, list):
-        models_input_lengths = np.array(models_input_lengths)
-    elif not isinstance(models_input_lengths, np.ndarray):
+    if isinstance(timestamps, list):
+        timestamps = np.array(timestamps)
+    elif not isinstance(timestamps, np.ndarray):
         raise TypeError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
-    if models_input_lengths.ndim != 1:
+    if timestamps.ndim != 1:
         raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
-    for l in models_input_lengths:
+    for l in timestamps:
         if l < 0:
             raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
-    if len(np.unique(models_input_lengths)) != len(models_input_lengths):
-        models_input_lengths = np.unique(models_input_lengths)
+    if len(np.unique(timestamps)) != len(timestamps):
+        timestamps = np.unique(timestamps)
         warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
     # Input validation: misclassification_cost
     if isinstance(misclassification_cost, list):
@@ -38,10 +56,10 @@ def create_cost_matrices(models_input_lengths, misclassification_cost, delay_cos
             "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
     # Input Validation: delay_cost
     if delay_cost is None:
-        return np.repeat(misclassification_cost[None, :], len(models_input_lengths), axis=0)
+        return np.repeat(misclassification_cost[None, :], len(timestamps), axis=0)
     if not callable(delay_cost):
         raise TypeError("Argument delay_cost should be a function that returns a cost given a time series length.")
-    return np.array([misclassification_cost + delay_cost(timestamp) for timestamp in models_input_lengths])
+    return np.array([misclassification_cost + delay_cost(timestamp) for timestamp in timestamps])
 
 
 class EconomyGamma:
@@ -53,15 +71,16 @@ class EconomyGamma:
     Introduced in paper [1].
 
     Parameters:
-            misclassification_cost: numpy.ndarray
-                Array of size Y*Y where Y is the number of classes and where each value at indices
-                [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
-                matrix will be all zeros. This cost must be defined by a domain expert and be expressed in the same unit
-                as the delay cost.
-            delay_cost: python function
-                Function that takes as input a time series input length and returns the timely cost of waiting
-                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
-                be expressed in the same unit as the misclassification cost.
+            cost_matrices: numpy.ndarray
+                Array of matrices of shape (T, Y, Y) where T is the number of considered timestamps/measurements and Y
+                is the number of class, representing the cost of misclassifying a time series at each time step.
+                For each matrix value at coordinates [i,j] represents the cost of predicting class j when the actual
+                class is i. Usually, diagonals of the matrices are all zeros, and the costs between each matrix should
+                globally  increase. These costs should be defined by the domain expert.
+                The function "create_cost_matrices" can be used to obtain these matrices from a single misclassification
+                matrix, a function that outputs the cost of delay given the number of measurments in a time series and
+                the set of timestamps.
+
             models_input_lengths: numpy.ndarray
                 Input lengths for which a transition matrix and confusion matrix and thresholds are computed. These
                 numbers of measurements/timestamps should be the same as for the trained chronological classifiers.
@@ -230,7 +249,7 @@ class EconomyGamma:
         self.classes_ = np.array(classes_) if classes_ is not None else np.arange(np.min(y), np.max(y)+1)
         y = np.array([np.nonzero(self.classes_ == y_)[0][0] for y_ in y])
         prior_class_prediction = np.argmax(np.unique(y, return_counts=True)[1])
-        # TODO: verify there is no pathological behaviour linked to using initial_cost
+        # TODO: make sure there is no pathological behaviour linked to using initial_cost
         self.initial_cost = np.sum(np.unique(y, return_counts=True)[1]/y.shape[0] * self.cost_matrices[0,:,prior_class_prediction])
         self.multiclass = False if len(self.classes_) <= 2 else True
 
