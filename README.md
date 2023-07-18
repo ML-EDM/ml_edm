@@ -1,4 +1,5 @@
 ml_edm : A python package for Machine Learning for Early Decision Making tasks
+
 Repository: https://github.com/ML-EDM/ml_edm
 
 Many situations require decisions to be made quickly to avoid the costs associated with delaying the decision. A doctor who needs to choose which test to perform on their patient and an agent considering whether a certain behavior on a network is caused by a hacker are examples of individuals confronted with such situations. However, taking a decision too hastily may lead to more mistakes, resulting in additional costs that could have been avoided. 
