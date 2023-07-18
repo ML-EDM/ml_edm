@@ -2,8 +2,8 @@ import copy
 import numpy as np
 import pandas as pd
 
-from dataset import extract_features, get_time_series_lengths
-from trigger_models import EconomyGamma, create_cost_matrices
+from .dataset import extract_features, get_time_series_lengths
+from .trigger_models import EconomyGamma, create_cost_matrices
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 

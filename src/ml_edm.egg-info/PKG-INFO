@@ -1,0 +1,13 @@
+Metadata-Version: 2.1
+Name: ml-edm
+Version: 0.0
+Summary: Tools for Machine Learning for Early Decision Making
+Author-email: Edouard BERTRAND <edouardbertrand100@gmail.com>
+Project-URL: Homepage, https://github.com/ML-EDM/ml_edm
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+TODO
