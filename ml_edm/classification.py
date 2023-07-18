@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 
 from dataset import extract_features, get_time_series_lengths
-from trigger_models import EconomyGamma
+from trigger_models import EconomyGamma, create_cost_matrices
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 
@@ -11,14 +11,14 @@ from warnings import warn
 
 # TODO : Multivariate data
 # TODO : Change feature extraction
+# TODO : Add Stopping Rule Mori
 # TODO : Add calibration
 # TODO : deal with NaN in dataset ? (Although HGBoost is nan compatible)
-# TODO : Add set_params, Add setters in every class, compatibility setter in Early Classifier
+# TODO : Add set_params, setters etc... Check integrity issues doing so
 # TODO : Optimize decision threshold
 # TODO : Verbose, loadbar?
 # TODO : implement sparse matrix compatibility
-# TODO : check_estimator scikitlearn -> make estimator
-# TODO : create factory code?
+# TODO : Make classes skleearn estimators
 
 
 class ChronologicalClassifiers:
@@ -71,6 +71,9 @@ class ChronologicalClassifiers:
         self.models_input_lengths = models_input_lengths
         self.classifiers = classifiers
         self.feature_extraction = feature_extraction
+        self.max_series_length = None
+        self.classes_ = None
+        self.class_prior = None
 
     def __getitem__(self, item):
         return self.classifiers[item]
@@ -108,7 +111,8 @@ class ChronologicalClassifiers:
         # INPUT VALIDATION / INTEGRITY
         # time_series_learning_ratio compatibility
         if self.learned_timestamps_ratio is not None:
-            if not isinstance(self.learned_timestamps_ratio, float) and not isinstance(self.learned_timestamps_ratio, int):
+            if not isinstance(self.learned_timestamps_ratio, float) \
+                    and not isinstance(self.learned_timestamps_ratio, int):
                 raise TypeError(
                     "Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
             if self.learned_timestamps_ratio <= 0 or self.learned_timestamps_ratio > 1:
@@ -393,24 +397,23 @@ class EarlyClassifier:
         misclassification_cost: numpy.ndarray
             Array of size Y*Y where Y is the number of classes and where each value at indices
             [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
-            matrix will be all zeros. This cost must be defined by a domain expert and be expressed in the same unit
+            matrix are all zeros. This cost must be defined by a domain expert and be expressed in the same unit
             as the delay cost.
         delay_cost: python function
-                Function that takes as input a time series input length and returns the timely cost of waiting
-                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
-                be expressed in the same unit as the misclassification cost.
+            Function that takes as input a time series input length and returns the timely cost of waiting
+            to obtain such number of measurements given the task. This cost must be defined by a domain expert and
+            be expressed in the same unit as the misclassification cost.
         nb_classifiers: int, default=20
-                Number of classifiers to be trained. If the number is inferior to the number of measures in the training
-                time series, the models input lengths will be equally spaced from max_length/n_classifiers
-                to max_length.
+            Number of classifiers to be trained. If the number is inferior to the number of measures in the training
+            time series, the models input lengths will be equally spaced from max_length/n_classifiers to max_length.
         nb_intervals: int, default=5
-                Number of groups to aggregate the training time series into for each input length during learning of the
-                trigger model. The optimal value of this hyperparameter may depend on the task.
+            Number of groups to aggregate the training time series into for each input length during learning of the
+            trigger model. The optimal value of this hyperparameter may depend on the task.
         base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
                 Classifier instance to be cloned and trained for each input length.
         learned_timestamps_ratio: float, default=None
-                Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
-                Incompatible with parameters 'nb_classifiers'
+            Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
+            Incompatible with parameters 'nb_classifiers'
         chronological_classifiers: ChronologicalClassifier()
             Instance of the ChronologicalClassifier object used in combination with the trigger model.
         trigger_model: EconomyGamma()
@@ -430,8 +433,8 @@ class EarlyClassifier:
                  learned_timestamps_ratio=None,
                  chronological_classifiers=None,
                  trigger_model=None):
-        self._misclassification_cost = misclassification_cost
-        self._delay_cost = delay_cost
+        self.misclassification_cost = misclassification_cost
+        self.delay_cost = delay_cost
         self._nb_classifiers = nb_classifiers
         self._learned_timestamps_ratio = learned_timestamps_ratio
         self._base_classifier = base_classifier
@@ -439,21 +442,7 @@ class EarlyClassifier:
         self.chronological_classifiers = chronological_classifiers
         self.trigger_model = trigger_model
 
-    @property
-    def misclassification_cost(self):
-        return self.trigger_model.misclassification_cost
-
-    @misclassification_cost.setter
-    def misclassification_cost(self, value):
-        self.misclassification_cost = value
-
-    @property
-    def delay_cost(self):
-        return self.trigger_model.delay_cost
-
-    @delay_cost.setter
-    def delay_cost(self, value):
-        self.delay_cost = value
+    # PROPERTIES ARE USED TO GIVE DIRECT ACCESS TO THE CHRONOLOGICAL CLASSIFIERS AND TRIGGER MODELS ARGUMENTS
 
     @property
     def nb_classifiers(self):
@@ -494,8 +483,9 @@ class EarlyClassifier:
             "base_classifier": self.chronological_classifiers.base_classifier,
             "nb_classifiers": self.chronological_classifiers.nb_classifiers,
             "learned_timestamps_ratio": self.chronological_classifiers.learned_timestamps_ratio,
-            "misclassification_cost": self.trigger_model.misclassification_cost,
-            "delay_cost": self.trigger_model.delay_cost,
+            "misclassification_cost": self.misclassification_cost,
+            "delay_cost": self.delay_cost,
+            "cost_matrices": self.trigger_model.cost_matrices,
             "nb_intervals": self.trigger_model.nb_intervals,
             "aggregation_function": self.trigger_model.aggregation_function,
             "thresholds": self.trigger_model.thresholds,
@@ -531,12 +521,15 @@ class EarlyClassifier:
                 Value between 0 and 1 representing the proportion of data to be used by the trigger_model for training.
         """
 
+        # VALIDATE X FORMAT
         if not isinstance(X, list) and not isinstance(X, np.ndarray) and not isinstance(X, pd.DataFrame):
             raise TypeError("X should be a 2-dimensional list, array or DataFrame of size (N, T) with N the number "
-                            "of examples and T the number of timestamps.")
+                            "of examples and T commune length of all complete time series.")
 
+        # DEFINE THE SEPARATION INDEX FOR VALIDATION DATA
         val_index = int(len(X) * (1-val_proportion))
-
+        
+        # FIT CLASSIFIERS
         if self.chronological_classifiers is not None:
             if not isinstance(self.chronological_classifiers, ChronologicalClassifiers):
                 raise ValueError(
@@ -548,13 +541,16 @@ class EarlyClassifier:
 
         self._fit_classifiers(X[:val_index], y[:val_index])
 
+        # OBTAIN COST MATRICES AND FIT TRIGGER MODEL
         if self.trigger_model is not None:
             if not isinstance(self.trigger_model, EconomyGamma):
                 raise ValueError(
                     "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
         else:
-            self.trigger_model = EconomyGamma(self._misclassification_cost, self._delay_cost,
-                                              self.chronological_classifiers.models_input_lengths, self._nb_intervals)
+            cost_matrices = create_cost_matrices(self.chronological_classifiers.models_input_lengths,
+                                                 self.misclassification_cost, self.delay_cost)
+            self.trigger_model = EconomyGamma(cost_matrices, self.chronological_classifiers.models_input_lengths,
+                                              self._nb_intervals)
 
         self._fit_trigger_model(X[val_index:], y[val_index:])
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
@@ -562,7 +558,7 @@ class EarlyClassifier:
 
     def predict(self, X):
         """
-        Predicts the class, class probabilites vectors, trigger indication and expected costs of the time series
+        Predicts the class, class probabilities vectors, trigger indication and expected costs of the time series
         contained in X.
         Parameters:
              X: np.ndarray
@@ -600,48 +596,8 @@ class EarlyClassifier:
         # Get time series lengths
         time_series_lengths = get_time_series_lengths(X)
 
+        # Predict
         classes = self.chronological_classifiers.predict(X)
         probas = self.chronological_classifiers.predict_proba(X)
-        triggers, costs = self.trigger_model.predict(X, time_series_lengths)
+        triggers, costs = self.trigger_model.predict(probas, time_series_lengths)
         return classes, probas, triggers, costs
-
-
-    """
-    def predict(self, x):
-        proba = self.classifiers.predict_proba()
-        class_ = argmax(proba)
-        if self.non_myopic:
-            trigger, cost, forecasted_trigger, forecasted_costs = self.trigger_model.predict()
-        else:
-            trigger, cost = self.trigger_model.predict()
-            forecasted_trigger, forecasted_costs = None, None
-        return class_, proba, trigger, cost, forecasted_trigger, forecasted_costs
-  
-    def predict_class(self, x):
-        class_ = self.classifiers.predict()
-        return class_
-
-    def predict_class_proba(self, x):
-        proba = self.classifiers.predict_proba()
-        return proba
-
-    def predict_on_first_trigger(self, x):
-        proba = self.classifiers.predict_proba()
-        class_ = argmax(proba)
-        if self.non_myopic:
-            trigger_time, cost, forecasted_costs = self.trigger_model.predict_on_first_trigger()
-        else:
-            trigger_time, cost = self.trigger_model.predict_on_first_trigger()
-            forecasted_costs = None, None
-        return trigger_time, class_, proba, cost, forecasted_costs
-
-    def predict_on_optimal_cost(self, x, y):
-        proba = self.classifiers.predict_proba()
-        class_ = argmax(proba)
-        if self.non_myopic:
-            trigger_time, cost, forecasted_costs = self.trigger_model.predict_on_first_trigger()
-        else:
-            trigger_time, cost = self.trigger_model.predict_on_first_trigger()
-            forecasted_costs = None, None
-        return trigger_time, class_, proba, cost, forecasted_costs
-    """
