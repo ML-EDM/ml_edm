@@ -1,0 +1,12 @@
+LICENSE
+README.md
+pyproject.toml
+src/ml_edm/__init__.py
+src/ml_edm/classification.py
+src/ml_edm/dataset.py
+src/ml_edm/trigger_models.py
+src/ml_edm.egg-info/PKG-INFO
+src/ml_edm.egg-info/SOURCES.txt
+src/ml_edm.egg-info/dependency_links.txt
+src/ml_edm.egg-info/requires.txt
+src/ml_edm.egg-info/top_level.txt

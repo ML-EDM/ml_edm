@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ml_edm"
+version = "0.0"
+authors = [
+  { name="Edouard BERTRAND", email="edouardbertrand100@gmail.com" },
+]
+description = "Tools for Machine Learning for Early Decision Making"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "numpy==1.23.5",
+    "pandas==1.5.3",
+    "scikit-learn==1.2.2",
+    "tsfel==0.1.5"
+]
+
+[project.urls]
+"Homepage" = "https://github.com/ML-EDM/ml_edm"
