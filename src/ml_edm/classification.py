@@ -27,25 +27,24 @@ class ChronologicalClassifiers:
     trigger model object such as an EconomyGamma instance to do tasks of early classification.
 
     Parameters:
-            nb_classifiers: int, default=20
-                Number of classifiers to be trained. If the number is inferior to the number of measures in the training
-                time series, the models input lengths will be equally spaced from max_length/n_classifiers
-                to max_length.
-            base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
-                Classifier instance to be cloned and trained for each input length.
-            learned_timestamps_ratio: float, default=None
-                Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
-                Incompatible with parameters 'nb_classifiers', 'models_input_lengths' and 'classifiers'.
-            models_input_lengths: numpy.ndarray, default = None
-                Array containing the numbers of time measurements/input length that each classifier is trained on.
-                Argument 'nb_classifiers' is deduced from the length of this list.
-            classifiers: numpy.ndarray, default = None
-                List or array containing the classifier instances to be trained. Argument 'nb_classifiers' is deduced
-                from the length of this list.
-            feature_extraction: boolean, default=False TODO: Update this once a better feature extraction is implemented.
-                Boolean indicating whether to use the default feature extraction. Currently implemented feature
-                extraction is quite slow, wordy, does not work with time series with less than 12 measurements and does
-                not seem very effective. We do not recommend its use without experimentation.
+        nb_classifiers: int, default=20
+            Number of classifiers to be trained. If the number is inferior to the number of measures in the training
+            time series, the models input lengths will be equally spaced from max_length/n_classifiers to max_length.
+        base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
+            Classifier instance to be cloned and trained for each input length.
+        learned_timestamps_ratio: float, default=None
+            Proportion of equally spaced time measurements/timestamps to use for training for all time series. A float
+            between 0 and 1. Incompatible with parameters 'nb_classifiers', 'models_input_lengths' and 'classifiers'.
+        models_input_lengths: numpy.ndarray, default = None
+            Array containing the numbers of time measurements/input length that each classifier is trained on.
+            Argument 'nb_classifiers' is deduced from the length of this list.
+        classifiers: numpy.ndarray, default = None
+            List or array containing the classifier instances to be trained. Argument 'nb_classifiers' is deduced from
+            the length of this list.
+        feature_extraction: boolean, default=False TODO: Update this once a better feature extraction is implemented.
+            Boolean indicating whether to use the default feature extraction. Currently implemented feature extraction
+            is quite slow, wordy, does not work with time series with less than 12 measurements and does not seem very
+            effective. We do not recommend its use without experimentation.
     Attributes:
         class_prior: numpy.ndarray
             Class prior probabilities vector obtained from the training set. The order of the classes is detailed in the
@@ -55,7 +54,7 @@ class ChronologicalClassifiers:
             the 'classes_' argument of the first classifier in the 'classifiers' list of the ChronologicalClassifiers
             object.
         max_series_length: int
-            Maximum number of measures contained by a time series in the training set.
+            Maximum number of measurements contained by a time series in the training set.
     """
 
     def __init__(self,
@@ -96,17 +95,17 @@ class ChronologicalClassifiers:
 
     def fit(self, X, y, *args, **kwargs):
         """
-        Takes as input a training set X of matrix shape (N, T) and its corresponding labels as a list y of N elements,
-        where N is the number of time series and T their commune complete length. This method fits every classifier
-        in the ChronologicalClassifiers object by cutting the time series to the input lengths indicated in argument
-        'models_input_lengths'. The prior probabilities are also learned.
+        This method fits every classifier in the ChronologicalClassifiers object by truncating the time series of the
+        training set to the input lengths contained in the attribute models_input_lengths'. The prior probabilities are
+        also saved.
+
         Parameters:
             X: np.ndarray
-            Training set of matrix shape (N, T) where:
-                N is the number of time series
-                T is the commune length of all complete time series
+                Training set of matrix shape (N, T) where:
+                    N is the number of time series
+                    T is the commune length of all complete time series
             y: nd.ndarray
-            List of the N corresponding labels of the training set.
+                List of the N corresponding labels of the training set.
         """
         # INPUT VALIDATION / INTEGRITY
         # time_series_learning_ratio compatibility
@@ -412,12 +411,12 @@ class EarlyClassifier:
         base_classifier: classifier instance, default = sklearn.ensemble.HistGradientBoostingClassifier()
                 Classifier instance to be cloned and trained for each input length.
         learned_timestamps_ratio: float, default=None
-            Proportion of equally spaced time measurements/timestamps to use for training. A float between 0 and 1.
-            Incompatible with parameters 'nb_classifiers'
+            Proportion of equally spaced time measurements/timestamps to use for training for all time series. A float
+            between 0 and 1. Incompatible with parameters 'nb_classifiers'
         chronological_classifiers: ChronologicalClassifier()
-            Instance of the ChronologicalClassifier object used in combination with the trigger model.
+            Custom instance of the ChronologicalClassifier object used in combination with the trigger model.
         trigger_model: EconomyGamma()
-            Instance of the EconomyGamma() object used in combination with the chronological classifiers.
+            Custom instance of the EconomyGamma() object used in combination with the chronological classifiers.
 
     Attributes:
         All attributes of the instance can be accessed from their 'chronological_classifiers' and 'trigger_model'
@@ -442,8 +441,7 @@ class EarlyClassifier:
         self.chronological_classifiers = chronological_classifiers
         self.trigger_model = trigger_model
 
-    # PROPERTIES ARE USED TO GIVE DIRECT ACCESS TO THE CHRONOLOGICAL CLASSIFIERS AND TRIGGER MODELS ARGUMENTS
-
+    # Properties are used to give direct access to the chronological classifiers and trigger models arguments.
     @property
     def nb_classifiers(self):
         return self.chronological_classifiers.nb_classifiers
@@ -561,10 +559,10 @@ class EarlyClassifier:
         Predicts the class, class probabilities vectors, trigger indication and expected costs of the time series
         contained in X.
         Parameters:
-             X: np.ndarray
+            X: np.ndarray
                 Dataset of time series of various sizes to predict. An array of size (N*max_T) where N is the number of
-                time series, max_T the max number of measurements in a time series and where empty values are filled with
-                nan. Can also be a pandas DataFrame or a list of lists.
+                time series, max_T the max number of measurements in a time series and where empty values are filled
+                with nan. Can also be a pandas DataFrame or a list of lists.
         Returns:
             classes: np.ndarray:
                 Array containing the predicted class of each time series in X.
@@ -574,7 +572,7 @@ class EarlyClassifier:
                 Array of booleans indicating whether to trigger the decision immediately with the current prediction
                 (True) or to wait for more data (False) for each time series in X.
             costs: np.ndarray
-                Array of arrays containing the expected costs of waiting longer for each predicted next measurement for
+                Array of arrays containing the expected costs of waiting longer for each next considered measurement for
                 each time series in X. Using argmin on each row outputs the number of timestamps to wait for until the
                 next expected trigger indication.
         """

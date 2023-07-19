@@ -14,7 +14,7 @@ KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 def create_cost_matrices(timestamps, misclassification_cost, delay_cost=None):
     """
     A function that converts a separated misclassification matrix and a delay cost function to an array of cost_matrices
-    along time given a series of timestamps for EconomyGamma.
+    showing the evolution of the misclassification cost along time given a series of timestamps for EconomyGamma.
 
     Parameters:
         timestamps: numpy.ndarray
@@ -25,10 +25,9 @@ def create_cost_matrices(timestamps, misclassification_cost, delay_cost=None):
             matrix are all zeros. This cost must be defined by a domain expert and be expressed in the same unit
             as the delay cost.
         delay_cost: python function, default=None
-                Function that takes as input a time series input length and returns the timely cost of waiting
-                to obtain such number of measurements given the task. This cost must be defined by a domain expert and
-                be expressed in the same unit as the misclassification cost.
-
+            Function that takes as input a time series input length and returns the timely cost of waiting to obtain
+            such number of measurements given the task. This cost must be defined by a domain expert and be expressed
+            in the same unit as the misclassification cost.
     """
 
     # INPUT VALIDATION
@@ -76,52 +75,52 @@ class EconomyGamma:
     Introduced in paper [1].
 
     Parameters:
-            cost_matrices: numpy.ndarray
-                Array of matrices of shape (T, Y, Y) where T is the number of considered timestamps/measurements and Y
-                is the number of class, representing the cost of misclassifying a time series at each time step.
-                For each matrix value at coordinates [i,j] represents the cost of predicting class j when the actual
-                class is i. Usually, diagonals of the matrices are all zeros, and the costs between each matrix should
-                globally  increase. These costs should be defined by the domain expert.
-                The function "create_cost_matrices" can be used to obtain these matrices from a single misclassification
-                matrix, a function that outputs the cost of delay given the number of measurments in a time series and
-                the set of timestamps.
-
-            models_input_lengths: numpy.ndarray
-                Input lengths for which a transition matrix and confusion matrix and thresholds are computed. These
-                numbers of measurements/timestamps should be the same as for the trained chronological classifiers.
-            nb_intervals: int, default=5
-                Number of groups to aggregate the training time series into for each input length during learning of the
-                trigger model. The optimal value of this hyperparameter may depend on the task.
-            aggregation_function: function/string. default='max'
-                Function to aggregate the probabilities of each class for each time series prediction in the multiclass
-                case to create the intervals thresholds. Known aggregation functions are listed in the
-                'KNOWN_AGGREGATIONS' constant.
-                See paper [2] for more detail.
+        cost_matrices: numpy.ndarray
+            Array of matrices of shape (T, Y, Y) where T is the number of considered timestamps/measurements and Y is
+            the number of classes, representing the cost of misclassifying a time series at each time step. For each
+            matrix, a value at coordinates [i,j] represents the cost of predicting class j when the actual class is i.
+            Usually, diagonals of the matrices are all zeros, and the costs between each matrix should globally
+            increase. These costs should be defined by the domain expert.
+            The function "create_cost_matrices" can be used to obtain these matrices from a single misclassification
+            matrix, a function that outputs the cost of delay given the number of measurements in a time series and
+            the set of timestamps.
+        models_input_lengths: numpy.ndarray
+            Input lengths considered by the trigger model. The time series' number of measurements for which a
+            transition matrix and confusion matrix and thresholds are computed. These lengths should be the same as the
+            ones used to train the chronological classifiers.
+        nb_intervals: int, default=5
+            Number of groups to aggregate the training time series into for each input length during the learning of the
+            trigger model. The optimal value of this hyperparameter may depend on the task.
+        aggregation_function: function/string. default='max'
+            Function to aggregate the probabilities of each class for each time series prediction in the multiclass
+            case to create the intervals thresholds. Known aggregation functions are listed in the
+            'KNOWN_AGGREGATIONS' constant.
+            See paper [2] for more detail.
 
     Attributes:
         thresholds: numpy.ndarray
-             Array of shape (T, nb_intervals-1) where T is the number of input_lengths known by the trigger model.
-             Thresholds correspond to the values between which the first class probability (or aggregated probabilities
-             in the multiclass case) need to fall for a prediction to be aggregated to a certain group (interval).
-             See [1] for more details.
+            Array of shape (T, nb_intervals-1) where T is the number of input_lengths known by the trigger model.
+            Thresholds correspond to the values between which the first class probability (or aggregated probabilities
+            in the multiclass case) need to fall for a prediction to be aggregated to a certain group (interval).
+            See paper [1] for more details.
         transition_matrices: numpy.ndarray
-            Markov chain matrices of shape (T-1, nb,intervals, nb_intervals) where T is the number of input_lengths
-            known by the trigger model and where each row t contains the transition matrix of intervals from timestamp t
-            to timestamp t+1.
+            Markov chain matrices of shape (T-1, nb_intervals, nb_intervals) where T is the number of input_lengths
+            considered by the trigger model and where each row t contains the transition matrix of intervals from
+            timestamp t to timestamp t+1.
             Each value [i,j] in the row t represents the probability for a time series to belonging to group j at t+1
             given that it belonged to group i at t.
-            See [1] for more details.
+            See paper [1] for more details.
         confusion_matrices: numpy.ndarray
             Array of shape (T, nb_intervals, Y, Y) where T is the number of input_lengths known by the trigger model and
             Y the number of classes. Contains for each input length the confusion matrix of the time series contained in
-            each interval, with values [i, j] the probabilities of being classified in class j when the actual series
-            class is i.
+            each interval, with values [i, j] representing the probabilities of being classified in class j when the
+            actual series' class is i.
         classes_: numpy.ndarray
             Array showing the names and order of classes, necessary to interpret the predictions contained in the
             training set.
         initial_cost: float
             Cost returned when trying to obtain the delay and misclassification cost associated to the prediction of a
-            time series which length is not known by the trigger model (not contained in 'models_input_lengths') and
+            time series whose length is not known by the trigger model (not contained in 'models_input_lengths') and
             below that of the first known length.
             Returns 0 for the the delay_cost summed with the cost of predicting the class with the highest prior
             probability found during training.
@@ -232,11 +231,13 @@ class EconomyGamma:
         elif isinstance(X_pred, pd.DataFrame):
             X_pred = X_pred.to_numpy()
         elif not isinstance(X_pred, np.ndarray):
-            raise TypeError("X_pred should be a 3-dimensional list, array or DataFrame of size (N, T, Z) with N the "
-                            "number of examples, T the number of timestamps and Z the number of classes probabilities.")
+            raise TypeError("X_pred should be a 3-dimensional list, array or DataFrame of shape (N, T, P) with N the "
+                            "number of time series, T the number of input lengths that were used for prediction and P "
+                            "the predicted class probabilities vectors.")
         if X_pred.ndim != 3:
-            raise ValueError("X_pred should be a 3-dimensional list, array or DataFrame of size (N, T, Z) with N the "
-                             "number of examples, T the number of timestamps and Z the number of classes probabilities.")
+            raise ValueError("X_pred should be a 3-dimensional list, array or DataFrame of shape (N, T, P) with N the "
+                            "number of time series, T the number of input lengths that were used for prediction and P "
+                            "the predicted class probabilities vectors.")
 
         if X_pred.shape[2] != self.cost_matrices.shape[1]:
             raise ValueError("X_pred probability vectors should have the same number of classes as the "
@@ -260,7 +261,7 @@ class EconomyGamma:
             classes_ = np.array(classes_)
         if not isinstance(classes_, np.ndarray):
             raise TypeError("Argument classes_ should be a list of class labels in the order "
-                            "of the probabilities in X_pred")
+                            "of the probabilities in X_pred.")
 
         # ASSIGNMENTS
         self.models_input_lengths = np.sort(self.models_input_lengths)
@@ -314,9 +315,9 @@ class EconomyGamma:
     def predict(self, X_pred, predicted_series_lengths):
         """
         Given a list of N predicted class probabilities vectors, predicts whether it is the right time to trigger the
-        prediction as well as the expected costs of delaying the decisions. Predictions which time series' input length
+        prediction as well as the expected costs of delaying the decisions. Predictions whose time series' input length
         is not known by the trigger model are approximated to the last known length. In the case where it is below the
-        first known length, 'initial_cost' is used.
+        first known length, the 'initial_cost' attribute, based on prior probabilities, is returned.
 
         Parameters:
             X_pred: numpy.ndarray
@@ -331,7 +332,8 @@ class EconomyGamma:
                 time series.
             costs: np.ndarray
                 Array of arrays representing the forecasted cost of delaying the decision until the number of
-                measurements reaches each one of the known input length for each time series prediction.
+                measurements reaches each one of the input lengths known by the trigger model for each time series
+                prediction.
         """
         # DATA VALIDATION / INTEGRITY
         # X_pred
@@ -342,24 +344,24 @@ class EconomyGamma:
             X_pred = X_pred.to_numpy()
         elif not isinstance(X_pred, np.ndarray):
             raise TypeError(
-                "X_pred should be a 2-dimensional list, array or DataFrame of size (N, Z) with N the number "
-                "of examples and Z the number of classes probabilities.")
+                "X_pred should be a 2-dimensional list, array or DataFrame of size (N, P) with N the number "
+                "of examples and P the number of classes probabilities.")
         if X_pred.ndim != 2:
             raise ValueError(
-                "X_pred should be a 2-dimensional list, array or DataFrame of size (N, T, Z) with N the number "
-                "of examples, T the number of timestamps and Z the number of classes probabilities.")
+                "X_pred should be a 2-dimensional list, array or DataFrame of size (N, P) with N the number "
+                "of examples and P the number of classes probabilities.")
         if len(X_pred) == 0:
-            raise ValueError("Dataset 'X_pred' to fit trigger_model on is empty.")
+            raise ValueError("Dataset 'X_pred' to predict triggering on is empty.")
 
         # predicted_series_lengths
         if isinstance(predicted_series_lengths, list):
             predicted_series_lengths = np.array(predicted_series_lengths)
         elif not isinstance(predicted_series_lengths, np.ndarray):
-            raise TypeError("Argument 'predicted_series_lengths' should be an 1D-array of time series lengths from which "
-                            "the predictions in X_pred where obtained.")
+            raise TypeError("Argument 'predicted_series_lengths' should be an 1D-array of time series lengths from "
+                            "which the predictions in X_pred where obtained.")
         if predicted_series_lengths.ndim != 1:
-            raise TypeError("Argument 'predicted_series_lengths' should be an 1D-array of time series lengths from which "
-                            "the predictions in X_pred where obtained.")
+            raise ValueError("Argument 'predicted_series_lengths' should be an 1D-array of time series lengths from "
+                            "which the predictions in X_pred where obtained.")
 
         # PREPARE DATA FOR PREDICTION
         # Update predicted_series_lengths to compatible lengths
@@ -423,7 +425,8 @@ class EconomyGamma:
 
         # Send warnings and return
         if truncated:
-            warn("Some predictions lengths were unknown to the trigger model. Last known length was assumed")
+            warn("Some predictions lengths were unknown to the trigger model. Predictions were approximated using the "
+                 "last known length.")
         if returned_priors:
             warn("Some predictions lengths where below that of the first length known by the trigger model. "
                  "Cost of predicting the most frequent class in priors was used.")

@@ -29,8 +29,8 @@ def extract_features(X):  # TODO: Replace with a better feature extraction.
     Parameters:
         X: ndarray
             Dataset of time series of various sizes to extract features from. An array of size (N*max_T) where N is the
-            number of time series, max_T the max number of measurements in a time series and where empty values are filled
-            with nan. Can also be a pandas DataFrame or a list of lists.
+            number of time series, max_T the max number of measurements in a time series and where empty values are
+            filled with nan. Can also be a pandas DataFrame or a list of lists.
     Returns:
         X_concat: ndarray
          Array of size (N, max_T+max_F)  where N is the number of time series, max_T the max number of measurements in a
