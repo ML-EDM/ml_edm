@@ -63,6 +63,7 @@ def extract_features(X):  # TODO: Replace with a better feature extraction.
     cfg_file = tsfel.get_features_by_domain()
     if len(X_extracted) != 0:
         X_extracted = tsfel.time_series_features_extractor(cfg_file, X_extracted).to_numpy()
+        
     # Combining extracted features to the original time series and reinserting the time series that could not be used
     # for feature extraction.
     X_concat = []
@@ -88,4 +89,5 @@ def extract_features(X):  # TODO: Replace with a better feature extraction.
     # Warning the user if some feature extraction could not be done.
     if len(too_short_time_series) > 0:
         warn("Could not extract features from time series with length inferior to 12.")
+
     return X_concat

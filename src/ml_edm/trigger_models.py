@@ -1,71 +1,102 @@
+import copy
 import numpy as np
 import pandas as pd
-from warnings import warn
-import copy
 
+from warnings import warn
+from itertools import permutations
+from collections.abc import Iterable
+from joblib import Parallel, delayed
+from scipy.stats import hmean
+from sklearn.svm import OneClassSVM
+from sklearn.model_selection import GridSearchCV
+
+from utils import check_X_probas
 
 def gini(probas):
     return 1 - np.sum(np.square(probas))
 
-
 KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
+class ProbabilityThreshold:
 
-def create_cost_matrices(timestamps, misclassification_cost, delay_cost=None):
-    """
-    A function that converts a separated misclassification matrix and a delay cost function to an array of cost_matrices
-    showing the evolution of the misclassification cost along time given a series of timestamps for EconomyGamma.
+    def __init__(self,
+                cost_matrices,
+                models_input_lengths,
+                manual_threshold=None,
+                n_jobs=1):
+        
+        self.cost_matrices = cost_matrices
+        self.models_input_lengths = models_input_lengths
 
-    Parameters:
-        timestamps: numpy.ndarray
-            Array of int representing the timestamps / time series input length, to create cost_matrices for.
-        misclassification_cost: numpy.ndarray
-            Array of size Y*Y where Y is the number of classes and where each value at indices
-            [i,j] represents the cost of predicting class j when the actual class is i. Usually, diagonals of the
-            matrix are all zeros. This cost must be defined by a domain expert and be expressed in the same unit
-            as the delay cost.
-        delay_cost: python function, default=None
-            Function that takes as input a time series input length and returns the timely cost of waiting to obtain
-            such number of measurements given the task. This cost must be defined by a domain expert and be expressed
-            in the same unit as the misclassification cost.
-    """
+        if manual_threshold is not None:
+            self.opt_threshold = manual_threshold
+        
+        self.n_jobs = n_jobs
+    
+    def _get_score(self, threshold, X_probas, y):
+        
+        costs = []
+        for i, probas in enumerate(X_probas):
+            for j in range(len(self.models_input_lengths)):
+                trigger = (np.max(probas[j]) >= threshold)
+                if trigger:
+                    pred = np.argmax(probas[j])
+                    costs.append(
+                        self.cost_matrices[j][pred][y[i]]
+                    )
+                    break
 
-    # INPUT VALIDATION
-    # models_input_lengths
-    if isinstance(timestamps, list):
-        timestamps = np.array(timestamps)
-    elif not isinstance(timestamps, np.ndarray):
-        raise TypeError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
-    if timestamps.ndim != 1:
-        raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
-    for l in timestamps:
-        if l < 0:
-            raise ValueError("Argument 'models_input_lengths' should be a 1D-array of positive int.")
-    if len(np.unique(timestamps)) != len(timestamps):
-        timestamps = np.unique(timestamps)
-        warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
+                if j==len(self.models_input_lengths)-1:
+                    pred = np.argmax(probas[j])
+                    costs.append(
+                        self.cost_matrices[j][pred][y[i]]
+                    )
 
-    # misclassification_cost
-    if isinstance(misclassification_cost, list):
-        misclassification_cost = np.array(misclassification_cost)
-    elif not isinstance(misclassification_cost, np.ndarray):
-        raise TypeError(
-            "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
-    if misclassification_cost.ndim != 2 or misclassification_cost.shape[0] != \
-            misclassification_cost.shape[1]:
-        raise ValueError(
-            "Argument 'misclassification_cost' should be an array of shape (Y,Y) with Y the number of clases.")
+        if isinstance(costs[0], np.void):
+            minus_acc  = np.mean([c[0] for c in costs])
+            earliness = np.mean([c[1] for c in costs])
+            agg_cost = hmean((minus_acc, earliness))
+        else:
+            agg_cost = np.mean(costs)
 
-    # delay_cost
-    if delay_cost is None:
-        return np.repeat(misclassification_cost[None, :], len(timestamps), axis=0)
-    if not callable(delay_cost):
-        raise TypeError("Argument delay_cost should be a function that returns a cost given a time series length.")
+        return agg_cost
+        
+    def fit(self, X, X_probas, y, classes_=None):
+        
+        if hasattr(self, 'opt_threshold'):
+            return self
+        
+        n_classes = len(np.unique(y))
+        candidate_threshold = np.linspace(1/n_classes, 1, 21)
 
-    # CREATE AND RETURN COST MATRICES
-    return np.array([misclassification_cost + delay_cost(timestamp) for timestamp in timestamps])
+        costs = Parallel(n_jobs=self.n_jobs) \
+            (delayed(self._get_score)(threshold, X_probas, y) for threshold in candidate_threshold)
+            
+        self.opt_threshold = candidate_threshold[np.argmin(costs)]
 
+        return self 
 
+    def predict(self, X, X_probas):
+
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                truncated = True
+                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+            timestamps.append(self.models_input_lengths[time_idx])
+        
+        triggers = []
+        for p in X_probas:
+            triggers.append(
+                (np.max(p) >= self.opt_threshold)
+            )
+
+        return np.array(triggers), None
+
+        
 class EconomyGamma:
     """
     A highly performing non-myopic trigger model based on the economy architecture for early time series classification.
@@ -166,7 +197,7 @@ class EconomyGamma:
             "multiclass": self.multiclass,
         }
 
-    def fit(self, X_pred, y, classes_=None):
+    def fit(self, X, X_probas, y, classes_=None):
         """
         Fit the trigger model based on the predictions probabilities obtained by classifying time series of progressive
         lengths (using predict_proba on a second training set with a ChronologicalClassifier object).
@@ -187,11 +218,11 @@ class EconomyGamma:
             self.cost_matrices = np.array(self.cost_matrices)
         elif not isinstance(self.cost_matrices, np.ndarray):
             raise TypeError(
-                "Argument 'cost_matrices' should be an array of shape (T, Y,Y) with T the number of timestamps and Y "
+                "Argument 'cost_matrices' should be an array of shape (T,Y,Y) with T the number of timestamps and Y"
                 "the number of classes.")
         if self.cost_matrices.ndim != 3 or self.cost_matrices.shape[1] != self.cost_matrices.shape[2]:
             raise ValueError(
-                "Argument 'cost_matrices' should be an array of shape (T, Y,Y) with T the number of timestamps and Y "
+                "Argument 'cost_matrices' should be an array of shape (T,Y,Y) with T the number of timestamps and Y"
                 "the number of classes.")
 
         # models_input_lengths
@@ -223,48 +254,52 @@ class EconomyGamma:
                 raise ValueError(f"Function {self.aggregation_function} from argument 'aggregation_function' "
                                  f"is not known. Known aggregations are {KNOWN_AGGREGATIONS.keys()}.")
 
-        # X_pred
-        X_pred = copy.deepcopy(X_pred)
+        # X_probas
+        X_probas = copy.deepcopy(X_probas)
         y = copy.deepcopy(y)
-        if isinstance(X_pred, list):
-            X_pred = np.array(X_pred)
-        elif isinstance(X_pred, pd.DataFrame):
-            X_pred = X_pred.to_numpy()
-        elif not isinstance(X_pred, np.ndarray):
+        if isinstance(X_probas, list):
+            X_probas = np.array(X_probas)
+        elif isinstance(X_probas, pd.DataFrame):
+            X_probas = X_probas.to_numpy()
+        elif not isinstance(X_probas, np.ndarray):
             raise TypeError("X_pred should be a 3-dimensional list, array or DataFrame of shape (N, T, P) with N the "
                             "number of time series, T the number of input lengths that were used for prediction and P "
                             "the predicted class probabilities vectors.")
-        if X_pred.ndim != 3:
+        if X_probas.ndim != 3:
             raise ValueError("X_pred should be a 3-dimensional list, array or DataFrame of shape (N, T, P) with N the "
                             "number of time series, T the number of input lengths that were used for prediction and P "
                             "the predicted class probabilities vectors.")
 
-        if X_pred.shape[2] != self.cost_matrices.shape[1]:
-            raise ValueError("X_pred probability vectors should have the same number of classes as the "
+        if X_probas.shape[2] != self.cost_matrices.shape[1]:
+            raise ValueError("X_probas probability vectors should have the same number of classes as the "
                              "cost matrices.")
-        if len(X_pred) == 0:
-            raise ValueError("Dataset 'X_pred' to fit trigger_model on is empty.")
-        for i in range(len(X_pred)):
-            if len(X_pred[i]) != len(X_pred[0]):
+        if len(X_probas) == 0:
+            raise ValueError("Dataset 'X_probas' to fit trigger_model on is empty.")
+        for i in range(len(X_probas)):
+            if len(X_probas[i]) != len(X_probas[0]):
                 raise ValueError("The number of timestamps should be the same for all examples.")
 
         # y
         if isinstance(y, list):
             y = np.array(y)
         elif not isinstance(y, np.ndarray):
-            raise TypeError("y should be an array of classes of size N with N the number of examples in X_pred")
-        if len(y) != len(X_pred):
-            raise ValueError("y should be an array of classes of size N with N the number of examples in X_pred.")
+            raise TypeError("y should be an array of classes of size N with N the number of examples in X_probas")
+        if len(y) != len(X_probas):
+            raise ValueError("y should be an array of classes of size N with N the number of examples in X_probas.")
         if y.ndim != 1:
-            raise ValueError("y should be an array of classes of size N with N the number of examples in X_pred.")
+            raise ValueError("y should be an array of classes of size N with N the number of examples in X_probas.")
+        
         if isinstance(classes_, list):
             classes_ = np.array(classes_)
+        """
         if not isinstance(classes_, np.ndarray):
             raise TypeError("Argument classes_ should be a list of class labels in the order "
                             "of the probabilities in X_pred.")
+        """
 
         # ASSIGNMENTS
         self.models_input_lengths = np.sort(self.models_input_lengths)
+
         if not callable(self.aggregation_function):
             self.aggregation_function = KNOWN_AGGREGATIONS[self.aggregation_function]
         else:
@@ -274,45 +309,65 @@ class EconomyGamma:
         self.classes_ = np.array(classes_) if classes_ is not None else np.arange(np.min(y), np.max(y)+1)
         y = np.array([np.nonzero(self.classes_ == y_)[0][0] for y_ in y])
         prior_class_prediction = np.argmax(np.unique(y, return_counts=True)[1])
+
         # TODO: make sure there is no pathological behaviour linked to using initial_cost
-        self.initial_cost = \
-            np.sum(np.unique(y, return_counts=True)[1]/y.shape[0] * self.cost_matrices[0,:,prior_class_prediction])
+        self.initial_cost = np.sum(
+            np.unique(y, return_counts=True)[1]/y.shape[0] *
+            self.cost_matrices[0,:,prior_class_prediction]
+        )
         self.multiclass = False if len(self.classes_) <= 2 else True
 
         # Aggregate values if multiclass : shape (N, T), values = aggregated value or 1st class proba
-        X_aggregated = np.apply_along_axis(self.aggregation_function, 2, X_pred) if self.multiclass else X_pred[:, :, 0]
+        X_aggregated = np.apply_along_axis(
+            self.aggregation_function, 2, X_probas
+        ) if self.multiclass else X_probas[:, :, 0]
 
         # Obtain thresholds for each group : X_sorted shape (T, N), values = sorted aggregated value
-        X_sorted = np.sort(X_aggregated.transpose())
+        X_sorted = np.sort(X_aggregated.T)
         thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_intervals + 1)[1:-1].astype(int)
         self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)
 
         # Get intervals given threshold : shape (T, N), values = group ID of each pred
-        X_intervals = \
-            np.array([[np.count_nonzero([threshold <= x for threshold in self.thresholds[i]]) for j, x
-                       in enumerate(timestamp_data)] for i, timestamp_data in enumerate(X_aggregated.transpose())])
+        X_intervals = np.array(
+            [[np.sum([threshold <= x for threshold in self.thresholds[i]]) 
+              for x in timestamp_data] for i, timestamp_data in enumerate(X_aggregated.T)]
+        )
 
         # Obtain transition_matrices, Shape (T-1, K, K)
         self.transition_matrices = []
         for t in range(len(self.models_input_lengths) - 1):
-            self.transition_matrices.append(np.array([np.array([np.count_nonzero((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(self.nb_intervals)]) /
-                                                      np.count_nonzero(X_intervals[t] == i) for i in range(self.nb_intervals)]))
+            self.transition_matrices.append(
+                np.array(
+                    [np.array([np.sum((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(self.nb_intervals)]) /
+                        np.sum(X_intervals[t] == i) for i in range(self.nb_intervals)]
+                )
+            )
         # fix nans created by division by 0 when not enough data
         self.transition_matrices = np.nan_to_num(self.transition_matrices, nan=1/self.nb_intervals)
 
         # Obtain confusion matrices : X_class shape (T, N) values = class of each prediction
-        X_class = np.apply_along_axis(np.argmax, 2, X_pred).transpose()
+        X_class = np.apply_along_axis(np.argmax, 2, X_probas).T
         self.confusion_matrices = [] # shape (T, K, P, P)
         for t, timestamp_data in enumerate(X_class):
-            group_data = [(timestamp_data[X_intervals[t] == k], y[X_intervals[t] == k]) for k in range(self.nb_intervals)]
-            confusion = np.array([np.array([[np.count_nonzero((x_ == np.nonzero(self.classes_ == j)[0][0]) & (y_ == np.nonzero(self.classes_ == i)[0][0])) for j in self.classes_] for i in self.classes_])
-                                  / len(y_) for x_, y_ in group_data])
+
+            group_data = [(timestamp_data[X_intervals[t] == k], y[X_intervals[t] == k]) 
+                          for k in range(self.nb_intervals)]
+            confusion = np.array(
+                [np.array(
+                    [[np.sum((x_ == np.nonzero(self.classes_ == j)[0][0]) & (y_ == np.nonzero(self.classes_ == i)[0][0]))
+                      for j in self.classes_] for i in self.classes_]
+                ) / len(y_) for x_, y_ in group_data]
+            )
             self.confusion_matrices.append(confusion)
+
         # Fix nans created by division by 0 when not enough data
-        self.confusion_matrices = np.nan_to_num(self.confusion_matrices, nan=1 / np.square(len(self.classes_)))
+        self.confusion_matrices = np.nan_to_num(
+            self.confusion_matrices, nan=1/np.square(len(self.classes_))
+        )
+
         return self
 
-    def predict(self, X_pred, predicted_series_lengths):
+    def predict(self, X, X_probas):
         """
         Given a list of N predicted class probabilities vectors, predicts whether it is the right time to trigger the
         prediction as well as the expected costs of delaying the decisions. Predictions whose time series' input length
@@ -336,59 +391,38 @@ class EconomyGamma:
                 prediction.
         """
         # DATA VALIDATION / INTEGRITY
-        # X_pred
-        X_pred = copy.deepcopy(X_pred)
-        if isinstance(X_pred, list):
-            X_pred = np.array(X_pred)
-        elif isinstance(X_pred, pd.DataFrame):
-            X_pred = X_pred.to_numpy()
-        elif not isinstance(X_pred, np.ndarray):
-            raise TypeError(
-                "X_pred should be a 2-dimensional list, array or DataFrame of size (N, P) with N the number "
-                "of examples and P the number of classes probabilities.")
-        if X_pred.ndim != 2:
-            raise ValueError(
-                "X_pred should be a 2-dimensional list, array or DataFrame of size (N, P) with N the number "
-                "of examples and P the number of classes probabilities.")
-        if len(X_pred) == 0:
-            raise ValueError("Dataset 'X_pred' to predict triggering on is empty.")
-
-        # predicted_series_lengths
-        if isinstance(predicted_series_lengths, list):
-            predicted_series_lengths = np.array(predicted_series_lengths)
-        elif not isinstance(predicted_series_lengths, np.ndarray):
-            raise TypeError("Argument 'predicted_series_lengths' should be an 1D-array of time series lengths from "
-                            "which the predictions in X_pred where obtained.")
-        if predicted_series_lengths.ndim != 1:
-            raise ValueError("Argument 'predicted_series_lengths' should be an 1D-array of time series lengths from "
-                            "which the predictions in X_pred where obtained.")
+        # X_probas
+        X_probas = check_X_probas(X_probas)
 
         # PREPARE DATA FOR PREDICTION
         # Update predicted_series_lengths to compatible lengths
-        predicted_series_lengths = np.array(predicted_series_lengths)
         truncated = False
-        for i, pred_length in enumerate(predicted_series_lengths):
-            if pred_length not in self.models_input_lengths:
-                for length in self.models_input_lengths[::-1]:
-                    if length < pred_length:
-                        predicted_series_lengths[i] = length
-                        truncated = True
-                        break
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                truncated = True
+                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+            timestamps.append(self.models_input_lengths[time_idx])
 
         # Aggregate probas : shape (N), values = aggregated pred
-        X_aggregated = np.apply_along_axis(self.aggregation_function, 1, X_pred) if self.multiclass else X_pred[:, 0]
+        X_aggregated = np.apply_along_axis(
+            self.aggregation_function, 1, X_probas
+        ) if self.multiclass else X_probas[:, 0]
 
         # Get intervals given threshold : shape (N), values = group
         X_intervals = []
         for i, x in enumerate(X_aggregated):
-            if predicted_series_lengths[i] < np.min(self.models_input_lengths):
+            if timestamps[i] < np.min(self.models_input_lengths):
                 interval = np.nan
             else:
-                interval = np.count_nonzero([threshold <= x for threshold
-                                             in self.thresholds[
-                                                 np.nonzero(
-                                                     self.models_input_lengths == predicted_series_lengths[i])[
-                                                     0][0]]])
+                interval = np.sum([threshold <= x 
+                                   for threshold in self.thresholds[
+                                       np.nonzero(self.models_input_lengths == timestamps[i])[0][0]
+                                    ]]
+                            )
                 X_intervals.append(interval)
 
         # CALCULATE AND RETURN COSTS
@@ -399,19 +433,19 @@ class EconomyGamma:
             prediction_forecasted_costs = []
 
             # If series length is not covered return initial cost? Else estimate cost
-            if predicted_series_lengths[n] < np.min(self.models_input_lengths):
+            if timestamps[n] < np.min(self.models_input_lengths):
                 prediction_forecasted_costs.append(self.initial_cost)
-                predicted_series_lengths[n] = np.min(self.models_input_lengths)
+                timestamps[n] = np.min(self.models_input_lengths)
                 gamma = np.repeat(1 / self.nb_intervals, self.nb_intervals)
                 returned_priors = True
-
             else:
                 gamma = np.zeros(self.nb_intervals)  # interval membership probability vector
                 gamma[group] = 1
 
             # Estimate cost for each length from prediction length to max_length
-            for t in range(np.nonzero(self.models_input_lengths == predicted_series_lengths[n])[0][0],
+            for t in range(np.nonzero(self.models_input_lengths == timestamps[n])[0][0],
                            len(self.models_input_lengths)):
+                
                 cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t])
                 prediction_forecasted_costs.append(cost)
                 if t != len(self.models_input_lengths) - 1:
@@ -430,28 +464,383 @@ class EconomyGamma:
         if returned_priors:
             warn("Some predictions lengths where below that of the first length known by the trigger model. "
                  "Cost of predicting the most frequent class in priors was used.")
-        return np.array(triggers), np.array(costs)
+            
+        return np.array(triggers), costs
 
 
-# TODO add stopping rule model
-"""
-class StoppingRule(TriggerModel):
-    """"""
+class StoppingRule:
+    
+    """
     A myopic trigger model which triggers a decision whenever a stopping rule representing time and confidence passes a
     certain threshold. Trigger models aim to determine the best time to trigger a decision given evolving time series.
     Introduced in :
     Early classification of time series by simultaneously optimizing the accuracy and earliness - U. Mori, A. Mendiburu,
     S. Dasgupta, J. A. Lozano - IEEE transactions on neural networks and learning systems
-    """"""
-    def __init__(self, earliness_cost_coeff=0):
-        super().__init__()
-        self.nb_groups = nb_groups
-        self.misclassification_cost = misclassification_cost
-        self.delay_cost = delay_cost
-        self.earliness_cost_coeff = earliness_cost_coeff
+    """
 
-    def fit(self, x_pred, y):
+    def __init__(self,
+                 cost_matrices,
+                 models_input_lengths,
+                 stopping_rule="SR1",
+                 n_jobs=1):
+        
+        super().__init__()
+        self.cost_matrices = cost_matrices
+        self.models_input_lengths = models_input_lengths
+        self.stopping_rule = stopping_rule
+        self.n_jobs = n_jobs
+
+    def _trigger(self, gammas, probas, t):
+
+        if self.stopping_rule == "SR1":
+            proba1 = np.max(probas) 
+            proba2 = np.min(np.delete(np.abs(probas - proba1), probas.argmax())) 
+            probas = np.array([proba1, proba2])
+
+        score = gammas[:-1] @ probas + gammas[-1] * (t/self.max_length)
+
+        if score > 0 or t==self.models_input_lengths[-1]:
+            return True
+
+        return False 
+
+    def _get_score(self, gammas, X_probas, y):
+
+        costs = []
+        for i in range(len(X_probas)):
+            for j, t in enumerate(self.models_input_lengths):
+                trigger = self._trigger(gammas, X_probas[i][j], t)
+                if trigger:
+                    pred = np.argmax(X_probas[i][j])
+                    costs.append(self.cost_matrices[j][pred][y[i]])
+                    break
+        
+        if isinstance(costs[0], np.void):
+            minus_acc  = np.mean([c[0] for c in costs])
+            earliness = np.mean([c[1] for c in costs])
+            agg_cost = hmean((minus_acc, earliness))
+        else:
+            agg_cost = np.mean(costs)
+
+        return agg_cost
+
+    def fit(self, X, X_probas, y, classes_=None):
+        
+        self.max_length = X.shape[1]
+
+        nb_gammas = 3 if self.stopping_rule == "SR1" else X_probas.shape[2]+1
+        self.candidates_gammas = list(permutations(np.linspace(-1, 1, 11), nb_gammas))
+
+        gamma_costs = Parallel(n_jobs=self.n_jobs) \
+                    (delayed(self._get_score)(gammas, X_probas, y) for gammas in self.candidates_gammas)
+        
+        self.opt_gammas = self.candidates_gammas[np.argmin(gamma_costs)]
+
         return self
 
-    def predict(self, x, timestamps):
-        return trigger, cost"""
+    def predict(self, X, X_probas):
+        
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                truncated = True
+                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+            timestamps.append(self.models_input_lengths[time_idx])
+        
+        triggers = []
+        for i, p in enumerate(X_probas):
+            triggers.append(
+                self._trigger(self.opt_gammas, p, timestamps[i])
+            )
+
+        return np.array(triggers), None
+
+
+class TEASER:
+
+    def __init__(self,
+                 cost_matrices,
+                 models_input_lengths,
+                 objective='hmean',
+                 n_jobs=1):
+        
+        super().__init__()
+        self.cost_matrices = cost_matrices
+        self.models_input_lengths = models_input_lengths
+        self.objective = objective
+
+        self.n_jobs = n_jobs
+
+    def fit(self, X, X_probas, y, classes_=None):
+        
+        self.max_length = X.shape[1]
+
+        # get predictions for each timestamp
+        X_pred = X_probas.argmax(axis=-1)
+        masks_pos_probas = np.array([x==y for x in X_pred.T])
+
+        self.master_clfs, X_oc = [], []
+        for j in range(len(self.models_input_lengths)):
+            probas = X_probas[:,j,:]
+            pred = probas.argmax(axis=-1)
+
+            probas_diff = np.array([np.max(x)-x for x in probas])
+            probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
+            probas_diff = np.min(probas_diff, axis=-1)
+
+            oc_features = np.concatenate(
+                (probas, pred[:, None], probas_diff[:, None]),
+                axis=-1
+            )
+            X_oc.append(oc_features)
+
+            oc_clf = OneClassSVM(kernel='rbf', nu=.05, tol=1e-4)
+            gamma_grid = (
+                {"gamma": [100, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1.5, 1]}
+            )
+            gs = GridSearchCV(
+                estimator=oc_clf,
+                param_grid=gamma_grid,
+                scoring='accuracy',
+                cv=min(len(oc_features), 5),
+                n_jobs=self.n_jobs
+            )
+            # train the set of master classifiers only
+            # on positives samples 
+            gs.fit(oc_features[masks_pos_probas[j]], 
+                   np.ones(len(oc_features[masks_pos_probas[j]]))
+            )
+            self.master_clfs.append(gs.best_estimator_)
+
+        # search best threshold v
+        best_obj = -1
+        for v in np.arange(1, 6):
+            final_pred = np.ones(len(X)) * (-1)
+            final_t_star = copy.deepcopy(final_pred)
+            consecutive_pred = np.zeros(len(X))
+
+            for j, t in enumerate(self.models_input_lengths):
+                accept = (self.master_clfs[j].predict(X_oc[j]) == 1)
+                if j==0:
+                    consecutive_pred[accept] += 1
+                else:
+                    prev_pred = X_pred[:,j-1]
+                    current_pred = X_pred[:,j]
+                    consecutive_pred[accept & (prev_pred == current_pred)] += 1
+                    # reset the count if streak is broken 
+                    consecutive_pred[accept & (prev_pred != current_pred)] = 0
+                
+                threshold_mask = (consecutive_pred == v)
+                final_pred[threshold_mask & (final_pred < 0)] = X_pred[:,j][threshold_mask & (final_pred < 0)]
+                final_t_star[threshold_mask & (final_t_star < 0)] = t
+
+                if -1 not in final_pred:
+                    break
+                
+                # if final timestep is reached samples that hasn't been 
+                # triggered yet are trigger 
+                if t == self.models_input_lengths[-1]:
+                    final_pred = np.where(final_pred == -1, current_pred, final_pred)
+                    final_t_star = np.where(final_t_star == -1, t, final_t_star)
+            
+            if self.objective == 'hmean':
+                acc = (final_pred == y).mean()
+                earliness = 1 - (np.mean(final_t_star) / self.max_length)
+
+                if best_obj < hmean((acc, earliness)):
+                    best_obj = hmean((acc, earliness))
+                    self.best_v = v
+            else:
+                t_idx = [
+                    np.where(self.models_input_lengths == final_t_star[i])[0][0] 
+                    for i in range(len(final_t_star))
+                ]
+                avg_cost = np.mean(
+                    [self.cost_matrices[int(t_idx[i])-1][int(p)][y[i]]
+                     for i, p in enumerate(final_pred)]
+                )
+                if best_obj < avg_cost:
+                    best_obj = avg_cost
+                    self.best_v = v
+
+        return self
+    
+    def predict(self, X, X_probas):
+
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                truncated = True
+                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+            timestamps.append(self.models_input_lengths[time_idx])
+
+        triggers = []
+        for i, probas in enumerate(X_probas):
+            if timestamps[i] < self.best_v:
+                triggers.append(False)
+            else:
+                if isinstance(probas, list):
+                    pred = np.array(probas).argmax(axis=-1)
+                    probas_diff = np.array([np.max(x)-x for x in probas])
+                    probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
+                    probas_diff = np.min(probas_diff, axis=-1)
+                else:
+                    pred = np.array([probas.argmax(axis=-1)])
+                    probas_diff = np.array([np.max(probas)-x for x in probas])
+                    probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
+                    probas_diff = np.array([np.min(probas_diff, axis=-1)])
+                    probas = probas[None, :]
+
+                oc_features = np.concatenate(
+                    (probas, pred[:, None], probas_diff[:, None]),
+                    axis=-1
+                )
+                accept = [(self.master_clfs[l].predict(oc_features[l:l+1]) == 1)
+                          for l in range(len(probas))]
+                accept = np.array(accept)
+                trigger = False
+
+                for i in range(len(pred)-self.best_v+1):
+                    window_pred = pred[i:i+self.best_v]
+                    window_accept = accept[i:i+self.best_v]
+
+                    if (np.all(window_pred == window_pred[0])) & \
+                        (np.sum(window_accept) == self.best_v):
+
+                        trigger = True
+                        triggers.append(trigger)
+                        break
+                
+                if not trigger:
+                    triggers.append(False)
+
+        return np.array(triggers), None
+
+
+class ECEC:
+
+    def __init__(self,
+                 cost_matrices,
+                 models_input_lengths,
+                 n_jobs=1):
+        
+        super().__init__()
+        self.cost_matrices = cost_matrices
+        self.models_input_lengths = models_input_lengths
+        self.n_jobs = n_jobs
+        
+    def _get_ratio(self, preds, y):
+
+        ratios = []
+        classes = np.unique(y)
+
+        for y1 in classes:
+            for y2 in classes:
+                nominator = len(preds[(preds == y2) & (y == y1)])
+                denominator = len(preds[(preds == y2)])
+
+                ratios.append(nominator / denominator)              
+
+        return ratios
+
+    def _get_fused_confidence(self, preds):
+
+        if not isinstance(preds, Iterable):
+            preds = [preds]
+        n_classes = np.sqrt(self.ratios.shape[-1]).astype(int)
+        confidences = []
+        for j in range(len(self.models_input_lengths)):
+
+            predictions = [preds[0]] if j==0 else preds[:j+1] 
+
+            res = 1
+            for k, p in enumerate(predictions):  
+                col_idx = n_classes * predictions[-1] + p
+                res *= (1 - self.ratios[k, col_idx])
+            
+            confidences.append(1 - res)
+
+        return confidences
+
+    def _get_score(self, threshold, X_pred, y):
+
+        costs = []
+        for i in range(len(X_pred)):
+
+            confidences = self._get_fused_confidence(X_pred[i])
+            for j, c in enumerate(confidences):
+                if c >= threshold:
+                    pred = X_pred[i][j]
+                    costs.append(self.cost_matrices[j][pred][y[i]])
+                    break
+        
+        if isinstance(costs[0], np.void):
+            minus_acc  = np.mean([c[0] for c in costs])
+            earliness = np.mean([c[1] for c in costs])
+            agg_cost = hmean((minus_acc, earliness))
+        else:
+            agg_cost = np.mean(costs)
+
+        return agg_cost
+
+    def fit(self, X, X_probas, y, classes_=None):
+
+        X_pred = X_probas.argmax(axis=-1)
+
+        # compute all ratios for all classifiers
+        self.ratios = []
+        for j in range(len(self.models_input_lengths)):
+            self.ratios.append(
+                self._get_ratio(X_pred[:,j], y)
+            )
+        self.ratios = np.array(self.ratios)
+        
+        # compute fused confidence for all classifiers 
+        all_confidences = []
+        for i in range(len(X_pred)):
+            all_confidences.extend(
+                self._get_fused_confidence(X_pred[i])
+            )
+
+        candidates = np.unique(all_confidences)
+        candidates = [
+            (candidates[j] + candidates[j+1]) / 2 for j in range(len(candidates)-1)
+        ]
+
+        # find best threshold candidates 
+        costs = Parallel(n_jobs=self.n_jobs) \
+            (delayed(self._get_score)(threshold, X_pred, y) for threshold in candidates)
+        
+        self.opt_threshold = candidates[np.argmin(costs)]
+
+        return self 
+    
+    def predict(self, X, X_probas):
+
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                truncated = True
+                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+            timestamps.append(self.models_input_lengths[time_idx])
+        
+        triggers = []
+        for probas in X_probas:
+            preds = np.array(probas).argmax(axis=-1)
+            confidence = self._get_fused_confidence(preds)[-1]
+
+            if confidence >= self.opt_threshold:
+                triggers.append(True)
+            else:
+                triggers.append(False)
+
+        return np.array(triggers), None
