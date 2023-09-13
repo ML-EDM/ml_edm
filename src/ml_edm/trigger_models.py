@@ -8,7 +8,8 @@ from collections.abc import Iterable
 from joblib import Parallel, delayed
 from scipy.stats import hmean
 from sklearn.svm import OneClassSVM
-from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
 
 from utils import check_X_probas
 
@@ -77,16 +78,6 @@ class ProbabilityThreshold:
         return self 
 
     def predict(self, X, X_probas):
-
-        timestamps = []
-        for ts in X:
-            diff = self.models_input_lengths - len(ts)
-            if 0 not in diff:
-                truncated = True
-                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
-            else:
-                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
-            timestamps.append(self.models_input_lengths[time_idx])
         
         triggers = []
         for p in X_probas:
@@ -469,7 +460,7 @@ class EconomyGamma:
 
 
 class StoppingRule:
-    
+
     """
     A myopic trigger model which triggers a decision whenever a stopping rule representing time and confidence passes a
     certain threshold. Trigger models aim to determine the best time to trigger a decision given evolving time series.
@@ -822,16 +813,6 @@ class ECEC:
         return self 
     
     def predict(self, X, X_probas):
-
-        timestamps = []
-        for ts in X:
-            diff = self.models_input_lengths - len(ts)
-            if 0 not in diff:
-                truncated = True
-                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
-            else:
-                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
-            timestamps.append(self.models_input_lengths[time_idx])
         
         triggers = []
         for probas in X_probas:
@@ -842,5 +823,153 @@ class ECEC:
                 triggers.append(True)
             else:
                 triggers.append(False)
+
+        return np.array(triggers), None
+
+
+class ECDIRE:
+
+    def __init__(self,
+                 chronological_classifiers,
+                 threshold_acc = 1.,
+                 n_jobs=1):
+
+        super().__init__()
+
+        self.models_input_lengths = chronological_classifiers.models_input_lengths
+        self.chronological_classifiers = chronological_classifiers
+
+        self.threshold_acc = threshold_acc
+        self.n_jobs = n_jobs
+
+    def _fit_cv(self, X, y, train_idx, test_idx):
+
+        classifiers_cv, acc_cv, probas_cv = [], [], []
+
+        clfs = copy.deepcopy(self.chronological_classifiers)
+        clfs.classifiers = None
+        clfs.fit(X[train_idx], y[train_idx])
+        classifiers_cv.extend(clfs.classifiers)
+
+        preds = [clfs.classifiers[j].predict(X[test_idx, :t])
+                 for j, t in enumerate(clfs.models_input_lengths)]
+        matrices = [confusion_matrix(y[test_idx], pred) for pred in preds]
+        # get intra-class accuracies 
+        acc_cv.append(
+            [matrix.diagonal()/matrix.sum(axis=1) for matrix in matrices]
+        )
+
+        correct_mask = [(pred == y[test_idx]) for pred in preds]
+        correct_probs = [clfs.classifiers[j].predict_proba(X[test_idx, :t])[correct_mask[j]] 
+                         for j, t in enumerate(clfs.models_input_lengths)]
+        # get probabilities for correct predicted samples 
+        probas_cv.append(
+            [np.concatenate((probs, y[test_idx][correct_mask[j], None]), axis=-1)
+             for j, probs in enumerate(correct_probs)]
+        )
+
+        return acc_cv, probas_cv
+
+    def _get_timeline(self, mean_acc):
+
+        timeline = []
+        for c, acc_class in enumerate(mean_acc.T):
+            acc_threshold = acc_class[-1] * self.threshold_acc
+            timestamp_idx = np.where((acc_class < acc_threshold))[0][-1] + 1
+            timeline.append(
+                (self.models_input_lengths[timestamp_idx], {c})
+            )
+
+        return sorted(timeline)
+    
+    def _get_reliability(self, probas):
+
+        thresholds = []
+        for j in range(len(self.models_input_lengths)):
+            probas_t = np.vstack([clf[0][j] for clf in probas])
+            
+            class_thresholds = []
+            for c in range(probas_t.shape[-1] - 1):
+                probas_c = probas_t[(probas_t[:,-1] == c)][:, :-1]
+
+                probas_diff = np.array([np.max(x)-x for x in probas_c])
+                probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
+                probas_diff = np.min(probas_diff, axis=-1)
+
+                class_thresholds.append((np.min(probas_diff)))
+            
+            thresholds.append(class_thresholds)
+        
+        return np.array(thresholds)
+        
+    def fit(self, X, X_probas, y, classes_=None):
+        
+        rskf = RepeatedStratifiedKFold(random_state=4)
+        results_cv = Parallel(n_jobs=self.n_jobs) \
+            (delayed(self._fit_cv)(X, y, train_idx, test_idx) for train_idx, test_idx in rskf.split(X, y)) 
+        
+        acc_cv, probs_cv = list(map(list, zip(*results_cv)))
+
+        mean_acc = np.array(acc_cv).squeeze().mean(axis=0)
+        self.timeline = self._get_timeline(mean_acc)
+        self.reliability = self._get_reliability(probs_cv)
+
+        max_t = max(self.timeline)[0]
+        if max_t != self.models_input_lengths[-1]:
+            idx = np.where(self.models_input_lengths == max_t)[0][0] + 1
+            self.timeline.extend(
+                ((t, set(y)) for t in self.models_input_lengths[idx:])
+            )
+        else:
+            self.timeline[-1] = (max_t, set(y))
+        
+        clf_idx = [np.where(self.models_input_lengths==t)[0][0]
+                   for t in list(zip(*self.timeline))[0]]
+        
+        self.reliability = self.reliability[clf_idx]
+        self.models_input_lengths = self.models_input_lengths[clf_idx]
+        self.chronological_classifiers.models_input_lengths = self.models_input_lengths
+        new_classifiers = [
+            self.chronological_classifiers.classifiers[j] 
+            for j in clf_idx
+        ]
+        self.chronological_classifiers.classifiers = new_classifiers
+
+        return self
+    
+    def predict(self, X, X_probas):
+
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                truncated = True
+                if (diff > 0).sum() == len(diff):
+                    timestamps.append(0)
+                else:
+                    time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                    timestamps.append(self.models_input_lengths[time_idx])
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+                timestamps.append(self.models_input_lengths[time_idx])
+
+        triggers = []
+        for i, probas in enumerate(X_probas):
+            trigger  = False
+            if timestamps[i] == 0:
+                triggers.append(trigger)
+            else:
+                pred = probas.argmax(axis=-1)
+                safe_class = [c for t, c in self.timeline
+                              if timestamps[i] == t]
+                if pred in safe_class[0]:
+                    probas_diff = np.array([np.max(probas)-x for x in probas])
+                    probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
+                    probas_diff = np.min(probas_diff)
+
+                    t_idx = np.where(self.models_input_lengths == timestamps[i])
+                    if probas_diff >= self.reliability[t_idx[0][0], pred]:
+                        trigger = True
+                triggers.append(trigger)
 
         return np.array(triggers), None

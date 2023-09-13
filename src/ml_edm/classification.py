@@ -8,7 +8,7 @@ from trigger_models import *
 from utils import *
 
 from sklearn.ensemble import HistGradientBoostingClassifier
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
 
 from warnings import warn
 
@@ -236,7 +236,7 @@ class ChronologicalClassifiers:
             if len(self.models_input_lengths) == 0:
                 raise ValueError("List argument 'models_input_lengths' is empty.")
             for t in self.models_input_lengths:
-                if not isinstance(t, np.int32):
+                if not (isinstance(t, np.int32) or isinstance(t, np.int64)):
                     raise TypeError("Argument 'models_input_lengths' should be a list or array of positive int.")
                 if t < 0:
                     raise ValueError("Argument 'models_input_lengths' should be a list or array of positive int.")
@@ -303,12 +303,12 @@ class ChronologicalClassifiers:
         for i, ts_length in enumerate(self.models_input_lengths):
             Xt = X[:, :ts_length]
             if self.feature_extraction:
-                Xt = extract_features(Xt)
+                Xt = extract_features(Xt)         
             self.classifiers[i].fit(Xt, y, *args, **kwargs)
 
         # GETTING PRIOR PROBABILITIES
         try:
-            self.classes_ = self.classifiers[0].classes_
+            self.classes_ = self.classifiers[0].classes_ 
             self.class_prior = np.array([np.sum(y == class_) / len(y) for class_ in self.classes_])
         except AttributeError:
             warn("Classifier does not have a 'classes_' attribute. Could not obtain prior probabilities.")
@@ -616,7 +616,7 @@ class EarlyClassifier:
                                                                       self._base_classifier,
                                                                       self._learned_timestamps_ratio,
                                                                       min_length=self._min_length)
-            self.chronological_classifiers = DeepChronologicalClassifier()
+            #self.chronological_classifiers = DeepChronologicalClassifier()
 
         self._fit_classifiers(X_clf, y_clf)
 
@@ -635,9 +635,11 @@ class EarlyClassifier:
             #self.trigger_model = TEASER(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
             #                            objective='hmean', n_jobs=1)
             #self.trigger_model = ECEC(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=2)
-            self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
+            #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
+            self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
             
         self._fit_trigger_model(X_trigger, y_trigger)
+        self.chronological_classifiers = self.trigger_model.chronological_classifiers
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
         return self
 

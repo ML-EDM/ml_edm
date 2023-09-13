@@ -85,7 +85,7 @@ class DeepChronologicalClassifier:
 
     def __init__(self,
                  num_epochs=30,
-                 batch_size=16,
+                 batch_size=8,
                  optim_params={
                      "lr": 1e-4, 
                      "weight_decay": 1e-5
@@ -321,7 +321,7 @@ class BucketBatchSampler(Sampler):
     def __iter__(self):
         self.batch_list = self._generate_batch_map() # <-- Could be a waste of performance
         # shuffle all the batches so they aren't ordered by bucket size
-        #random.shuffle(self.batch_list)
+        random.shuffle(self.batch_list)
         for i in self.batch_list:
             yield i
     
