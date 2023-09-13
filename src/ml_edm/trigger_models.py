@@ -831,7 +831,8 @@ class ECDIRE:
 
     def __init__(self,
                  chronological_classifiers,
-                 threshold_acc = 1.,
+                 threshold_acc=.8,
+                 cross_validation=False,
                  n_jobs=1):
 
         super().__init__()
@@ -840,6 +841,7 @@ class ECDIRE:
         self.chronological_classifiers = chronological_classifiers
 
         self.threshold_acc = threshold_acc
+        self.cross_validation = cross_validation
         self.n_jobs = n_jobs
 
     def _fit_cv(self, X, y, train_idx, test_idx):
@@ -853,23 +855,33 @@ class ECDIRE:
 
         preds = [clfs.classifiers[j].predict(X[test_idx, :t])
                  for j, t in enumerate(clfs.models_input_lengths)]
-        matrices = [confusion_matrix(y[test_idx], pred) for pred in preds]
-        # get intra-class accuracies 
-        acc_cv.append(
-            [matrix.diagonal()/matrix.sum(axis=1) for matrix in matrices]
-        )
-
-        correct_mask = [(pred == y[test_idx]) for pred in preds]
-        correct_probs = [clfs.classifiers[j].predict_proba(X[test_idx, :t])[correct_mask[j]] 
-                         for j, t in enumerate(clfs.models_input_lengths)]
-        # get probabilities for correct predicted samples 
-        probas_cv.append(
-            [np.concatenate((probs, y[test_idx][correct_mask[j], None]), axis=-1)
-             for j, probs in enumerate(correct_probs)]
-        )
+        probs = [clfs.classifiers[j].predict_proba(X[test_idx, :t]) 
+                 for j, t in enumerate(clfs.models_input_lengths)]
+        
+        acc_cv, probas_cv = self._get_metrics(probs, preds, y[test_idx])
 
         return acc_cv, probas_cv
 
+    def _get_metrics(self, probas, predictions, y_true):
+
+        accuracies, probs = [], []
+
+        matrices = [confusion_matrix(y_true, pred) for pred in predictions]
+        # get intra-class accuracies 
+        accuracies.append(
+            [matrix.diagonal()/matrix.sum(axis=1) for matrix in matrices]
+        )
+
+        correct_mask = [(pred == y_true) for pred in predictions]
+        correct_probs = [p[correct_mask[j]] for j, p in enumerate(probas)]
+        # get probabilities for correct predicted samples 
+        probs.append(
+            [np.concatenate((probs, y_true[correct_mask[j], None]), axis=-1)
+             for j, probs in enumerate(correct_probs)]
+        )
+
+        return accuracies, probs
+    
     def _get_timeline(self, mean_acc):
 
         timeline = []
@@ -886,7 +898,7 @@ class ECDIRE:
 
         thresholds = []
         for j in range(len(self.models_input_lengths)):
-            probas_t = np.vstack([clf[0][j] for clf in probas])
+            probas_t = np.vstack([clf[j] for clf in probas])
             
             class_thresholds = []
             for c in range(probas_t.shape[-1] - 1):
@@ -904,13 +916,19 @@ class ECDIRE:
         
     def fit(self, X, X_probas, y, classes_=None):
         
-        rskf = RepeatedStratifiedKFold(random_state=4)
-        results_cv = Parallel(n_jobs=self.n_jobs) \
-            (delayed(self._fit_cv)(X, y, train_idx, test_idx) for train_idx, test_idx in rskf.split(X, y)) 
+        if self.cross_validation:
+            rskf = RepeatedStratifiedKFold(random_state=4)
+            results_cv = Parallel(n_jobs=self.n_jobs) \
+                (delayed(self._fit_cv)(X, y, train_idx, test_idx) for train_idx, test_idx in rskf.split(X, y)) 
         
-        acc_cv, probs_cv = list(map(list, zip(*results_cv)))
+            acc_cv, probs_cv = list(map(list, zip(*results_cv)))
+            probs_cv = [p[0] for p in probs_cv]
+        else:
+            acc_cv, probs_cv = self._get_metrics(
+                np.swapaxes(X_probas, 0, 1), X_probas.argmax(-1).T, y
+            )
 
-        mean_acc = np.array(acc_cv).squeeze().mean(axis=0)
+        mean_acc = np.array(acc_cv).mean(axis=0).squeeze()
         self.timeline = self._get_timeline(mean_acc)
         self.reliability = self._get_reliability(probs_cv)
 
