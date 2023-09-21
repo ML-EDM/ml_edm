@@ -831,7 +831,7 @@ class ECDIRE:
 
     def __init__(self,
                  chronological_classifiers,
-                 threshold_acc=.8,
+                 threshold_acc=1.,
                  cross_validation=False,
                  n_jobs=1):
 

@@ -5,6 +5,7 @@ import pandas as pd
 from deep_classifiers import DeepChronologicalClassifier
 from dataset import extract_features, get_time_series_lengths
 from trigger_models import *
+from trigger_models_full import *
 from utils import *
 
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -586,7 +587,8 @@ class EarlyClassifier:
     def _fit_trigger_model(self, X, y):
         X_pred = np.stack([self.chronological_classifiers.predict_proba(X[:, :length])
                            for length in self.chronological_classifiers.models_input_lengths], axis=1)
-        self.trigger_model.fit(X, X_pred, y)
+        #self.trigger_model.fit(X, X_pred, y)
+        self.trigger_model.fit(X, y)
 
     def fit(self, X, y, val_proportion=.7):
         """
@@ -636,10 +638,11 @@ class EarlyClassifier:
             #                            objective='hmean', n_jobs=1)
             #self.trigger_model = ECEC(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=2)
             #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
-            self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
+            #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
+            self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
             
         self._fit_trigger_model(X_trigger, y_trigger)
-        self.chronological_classifiers = self.trigger_model.chronological_classifiers
+        # self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
         return self
 
@@ -672,6 +675,8 @@ class EarlyClassifier:
         # Predict
         classes = self.chronological_classifiers.predict(X)
         probas = self.chronological_classifiers.predict_proba(X, past_probas=False)
-        triggers, costs = self.trigger_model.predict(X, probas)
+        #triggers, costs = self.trigger_model.predict(X, probas)
+        classes, triggers = self.trigger_model.predict(X)
+        costs = None
 
         return classes, probas, triggers, costs
