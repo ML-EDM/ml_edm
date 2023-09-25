@@ -639,7 +639,8 @@ class EarlyClassifier:
             #self.trigger_model = ECEC(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=2)
             #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
             #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
-            self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
+            #self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
+            self.trigger_model = ECTS(self.chronological_classifiers.models_input_lengths, support=0, relaxed=False, n_jobs=3)
             
         self._fit_trigger_model(X_trigger, y_trigger)
         # self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
