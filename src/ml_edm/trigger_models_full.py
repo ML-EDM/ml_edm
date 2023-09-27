@@ -1,7 +1,5 @@
 import numpy as np
-import multiprocessing as mp
 
-from multiprocessing import Pool
 from joblib import Parallel, delayed
 from sklearn.neighbors import NearestNeighbors
 

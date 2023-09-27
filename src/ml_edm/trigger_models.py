@@ -8,6 +8,7 @@ from collections.abc import Iterable
 from joblib import Parallel, delayed
 from scipy.stats import hmean
 from sklearn.svm import OneClassSVM
+from sklearn.kernel_ridge import KernelRidge
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
 
@@ -991,3 +992,95 @@ class ECDIRE:
                 triggers.append(trigger)
 
         return np.array(triggers), None
+
+
+class CALIMERA:
+
+    def __init__(self,
+                 cost_matrices,
+                 models_input_lengths,
+                 alpha,
+                 n_jobs=1):
+        
+        self.cost_matrices = cost_matrices
+        self.models_input_lengths = models_input_lengths
+        self.alpha = alpha
+
+        self.n_jobs = n_jobs
+    
+    def _generate_features(self, probas, time_idx, y):
+
+        max_probas = np.max(probas, axis=-1)
+        second_max_probas = np.partition(probas, -2)[:,-2]
+
+        features = np.concatenate(
+            (probas, max_probas[:,None], second_max_probas[:,None]), axis=-1
+        )
+        delay_cost = self.alpha * self.models_input_lengths[time_idx] / self.max_length
+        costs = 1 - max_probas + delay_cost
+
+        #preds = probas.argmax(axis=-1)
+        #costs = [self.cost_matrices[time_idx][pred][y[i]]
+        #         for i, pred in enumerate(preds)]
+
+        return features, costs
+    
+    def fit(self, X, X_probas, y, classes_=None):
+
+        self.max_length = X.shape[1]
+        self.max_timestamp = len(self.models_input_lengths)
+
+        results  = [self._generate_features(X_probas[:,t,:], t, y) 
+                    for t in range(X_probas.shape[1])]
+        
+        features, costs = zip(*results)
+        features, costs = (np.array(features), np.array(costs))
+
+        self.halters = [None for _ in range(self.max_timestamp-1)]
+
+        for t in range(self.max_timestamp-2, -1, -1):
+
+            X_trigger = features[t]
+            y_trigger = costs[t+1] - costs[t] 
+
+            model = KernelRidge(kernel='rbf').fit(X_trigger, y_trigger)
+            self.halters[t] = model
+            predicted_cost_difference = model.predict(X_trigger)
+            for j in range(len(X_trigger)):
+                if predicted_cost_difference[j] < 0:
+                    costs[t, j] = costs[t+1, j]
+
+        return self 
+    
+    def predict(self, X, X_probas):
+
+        timestamps = []
+        for ts in X:
+            diff = self.models_input_lengths - len(ts)
+            if 0 not in diff:
+                if (diff > 0).sum() == len(diff):
+                    timestamps.append(0)
+                else:
+                    time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                    timestamps.append(self.models_input_lengths[time_idx])
+            else:
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+                timestamps.append(self.models_input_lengths[time_idx])
+
+        triggers, costs = [], []
+        trigger = False
+        for i, probas in enumerate(X_probas):
+            time_idx = np.where(timestamps[i] == self.models_input_lengths)[0][0]
+            X_trigger, _ = self._generate_features(probas[None,:], time_idx, 
+                                                   np.zeros(X.shape[0], dtype=int))
+            
+            predicted_cost_diff = self.halters[time_idx].predict(X_trigger)
+
+            if predicted_cost_diff > 0:
+                trigger = True
+            
+            triggers.append(trigger)
+            costs.append(predicted_cost_diff[0])
+
+
+        return np.array(triggers), np.array(costs)
