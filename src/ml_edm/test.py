@@ -54,7 +54,7 @@ def test():
                      base_classifier=xgb.XGBClassifier(),
                      min_length=1,
                      trigger_model=None)
-    ec.fit(train_x, train_y, val_proportion=0)
+    ec.fit(train_x, train_y, val_proportion=0.7)
 
     score(ec, test_x, test_y)
 

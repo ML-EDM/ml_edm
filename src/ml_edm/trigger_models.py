@@ -566,49 +566,59 @@ class TEASER:
 
         self.n_jobs = n_jobs
 
+    def _generate_features(self, probas):
+
+        max_probas = np.max(probas, axis=-1)
+        second_max_probas = np.partition(probas, -2)[:,-2]
+        diff = max_probas - second_max_probas
+
+        preds = probas.argmax(axis=-1)
+
+        features = np.concatenate(
+            (probas, preds[:, None], diff[:, None]), axis=-1
+        )
+
+        return features 
+    
+    def _fit_master_clf(self, probas, masks_pos_probas):
+
+        oc_features = self._generate_features(probas)
+
+        oc_clf = OneClassSVM(kernel='rbf', nu=.05, tol=1e-4)
+        gamma_grid = (
+            {"gamma": [100, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1.5, 1]}
+        )
+        gs = GridSearchCV(
+            estimator=oc_clf,
+            param_grid=gamma_grid,
+            scoring='accuracy',
+            cv=min(len(oc_features), 5),
+            n_jobs=self.n_jobs
+        )
+        # train the set of master classifiers only
+        # on positives samples 
+        gs.fit(oc_features[masks_pos_probas], 
+               np.ones(len(oc_features[masks_pos_probas]))
+        )
+
+        return gs.best_estimator_, oc_features
+    
     def fit(self, X, X_probas, y, classes_=None):
         
         self.max_length = X.shape[1]
+        self.n_classes = len(np.unique(y))
 
         # get predictions for each timestamp
         X_pred = X_probas.argmax(axis=-1)
         masks_pos_probas = np.array([x==y for x in X_pred.T])
 
-        self.master_clfs, X_oc = [], []
-        for j in range(len(self.models_input_lengths)):
-            probas = X_probas[:,j,:]
-            pred = probas.argmax(axis=-1)
-
-            probas_diff = np.array([np.max(x)-x for x in probas])
-            probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
-            probas_diff = np.min(probas_diff, axis=-1)
-
-            oc_features = np.concatenate(
-                (probas, pred[:, None], probas_diff[:, None]),
-                axis=-1
-            )
-            X_oc.append(oc_features)
-
-            oc_clf = OneClassSVM(kernel='rbf', nu=.05, tol=1e-4)
-            gamma_grid = (
-                {"gamma": [100, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1.5, 1]}
-            )
-            gs = GridSearchCV(
-                estimator=oc_clf,
-                param_grid=gamma_grid,
-                scoring='accuracy',
-                cv=min(len(oc_features), 5),
-                n_jobs=self.n_jobs
-            )
-            # train the set of master classifiers only
-            # on positives samples 
-            gs.fit(oc_features[masks_pos_probas[j]], 
-                   np.ones(len(oc_features[masks_pos_probas[j]]))
-            )
-            self.master_clfs.append(gs.best_estimator_)
+        res = Parallel(n_jobs=self.n_jobs) \
+            (delayed(self._fit_master_clf)(X_probas[:,j,:], masks_pos_probas[j]) 
+             for j in range(len(self.models_input_lengths)))
+        self.master_clfs, X_oc = zip(*res)
 
         # search best threshold v
-        best_obj = -1
+        best_obj = np.inf
         for v in np.arange(1, 6):
             final_pred = np.ones(len(X)) * (-1)
             final_t_star = copy.deepcopy(final_pred)
@@ -639,11 +649,11 @@ class TEASER:
                     final_t_star = np.where(final_t_star == -1, t, final_t_star)
             
             if self.objective == 'hmean':
-                acc = (final_pred == y).mean()
-                earliness = 1 - (np.mean(final_t_star) / self.max_length)
+                minus_acc = 1 - (final_pred == y).mean()
+                earliness = (np.mean(final_t_star) / self.max_length)
 
-                if best_obj < hmean((acc, earliness)):
-                    best_obj = hmean((acc, earliness))
+                if best_obj > hmean((minus_acc, earliness)):
+                    best_obj = hmean((minus_acc, earliness))
                     self.best_v = v
             else:
                 t_idx = [
@@ -651,10 +661,10 @@ class TEASER:
                     for i in range(len(final_t_star))
                 ]
                 avg_cost = np.mean(
-                    [self.cost_matrices[int(t_idx[i])-1][int(p)][y[i]]
+                    [self.cost_matrices[int(t_idx[i])][int(p)][y[i]]
                      for i, p in enumerate(final_pred)]
                 )
-                if best_obj < avg_cost:
+                if best_obj > avg_cost:
                     best_obj = avg_cost
                     self.best_v = v
 
@@ -666,7 +676,6 @@ class TEASER:
         for ts in X:
             diff = self.models_input_lengths - len(ts)
             if 0 not in diff:
-                truncated = True
                 time_idx = np.where(diff > 0, diff, -np.inf).argmax()
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
@@ -677,34 +686,22 @@ class TEASER:
             if timestamps[i] < self.best_v:
                 triggers.append(False)
             else:
-                if isinstance(probas, list):
-                    pred = np.array(probas).argmax(axis=-1)
-                    probas_diff = np.array([np.max(x)-x for x in probas])
-                    probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
-                    probas_diff = np.min(probas_diff, axis=-1)
-                else:
-                    pred = np.array([probas.argmax(axis=-1)])
-                    probas_diff = np.array([np.max(probas)-x for x in probas])
-                    probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
-                    probas_diff = np.array([np.min(probas_diff, axis=-1)])
-                    probas = probas[None, :]
+                probas = np.array(probas).reshape((-1, self.n_classes))
+                pred = probas.argmax(axis=-1)
+                oc_features = self._generate_features(probas)
 
-                oc_features = np.concatenate(
-                    (probas, pred[:, None], probas_diff[:, None]),
-                    axis=-1
+                accept = np.array(
+                    [(self.master_clfs[l].predict(oc_features[l:l+1]) == 1)
+                     for l in range(len(probas))]
                 )
-                accept = [(self.master_clfs[l].predict(oc_features[l:l+1]) == 1)
-                          for l in range(len(probas))]
-                accept = np.array(accept)
+                
                 trigger = False
-
                 for i in range(len(pred)-self.best_v+1):
                     window_pred = pred[i:i+self.best_v]
                     window_accept = accept[i:i+self.best_v]
 
                     if (np.all(window_pred == window_pred[0])) & \
                         (np.sum(window_accept) == self.best_v):
-
                         trigger = True
                         triggers.append(trigger)
                         break

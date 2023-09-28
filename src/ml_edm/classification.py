@@ -15,7 +15,6 @@ from warnings import warn
 
 # TODO : Multivariate data
 # TODO : Change feature extraction
-# TODO : Add Stopping Rule Mori
 # TODO : Add calibration
 # TODO : deal with NaN in dataset ? (Although HGBoost is nan compatible)
 # TODO : Add set_params, setters etc... Check integrity issues doing so
@@ -639,7 +638,7 @@ class EarlyClassifier:
             #self.trigger_model = StoppingRule(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
             #                                  stopping_rule="SR1", n_jobs=2)
             #self.trigger_model = TEASER(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
-            #                            objective='hmean', n_jobs=1)
+            #                            objective='avg_cost', n_jobs=1)
             #self.trigger_model = ECEC(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=2)
             #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
             #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
