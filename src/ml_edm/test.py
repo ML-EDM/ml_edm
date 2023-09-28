@@ -14,6 +14,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.svm import OneClassSVM
 from sklearn.metrics import cohen_kappa_score
 import xgboost as xgb
+from metrics import average_cost
 
 
 def test():
@@ -27,15 +28,17 @@ def test():
     X  = np.vstack(X["dim_0"].apply(lambda x: x.values)) # Convert to numpy array
     # separate train test
     test_index = int(.7*len(X))
-    """
-    train_x, test_x, train_y, test_y = train_test_split(X, y, test_size=0.3, random_state=42)
-    train_x[np.isnan(train_x)] = 0
-    test_x[np.isnan(test_x)] = 0
+    
+    y = y.astype(int) - 1
+    train_x, test_x, train_y, test_y = train_test_split(X, y, test_size=0.3, random_state=44)
+    #train_x[np.isnan(train_x)] = 0
+    #test_x[np.isnan(test_x)] = 0
     """
     train_x, train_y = X[:test_index], y[:test_index].astype(int)
     test_x, test_y = X[test_index:], y[test_index:].astype(int)
     train_y -= 1
     test_y -= 1
+    """
 
     misclassification_cost = [[0, 1], [1, 0]]
     #misclassification_cost = np.ones((10, 10)) - np.eye(10)
@@ -47,11 +50,11 @@ def test():
 
     ec = EarlyClassifier(misclassification_cost, delay_cost, 
                      nb_intervals=5, 
-                     nb_classifiers=20,
+                     nb_classifiers=24,
                      base_classifier=xgb.XGBClassifier(),
                      min_length=1,
                      trigger_model=None)
-    ec.fit(train_x, train_y)
+    ec.fit(train_x, train_y, val_proportion=0)
 
     score(ec, test_x, test_y)
 
@@ -92,9 +95,12 @@ def score(ec, X_test, y_test):
             all_preds[np.where(all_preds < 0)] = classes[np.where(all_preds < 0)]
     
     acc = (all_preds==y_test).mean()
+    earl = np.mean(all_t_star) / X_test.shape[1]
     #avg_cost = np.mean(all_costs)
     med_t_star = np.median(all_t_star)
 
-    return acc, med_t_star
+    avg_cost = average_cost(acc, earl, 1/4)
+
+    return acc, earl, avg_cost
 
 test()

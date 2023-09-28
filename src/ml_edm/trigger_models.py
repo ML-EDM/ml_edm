@@ -1012,9 +1012,10 @@ class CALIMERA:
 
         max_probas = np.max(probas, axis=-1)
         second_max_probas = np.partition(probas, -2)[:,-2]
+        diff = max_probas - second_max_probas
 
         features = np.concatenate(
-            (probas, max_probas[:,None], second_max_probas[:,None]), axis=-1
+            (probas, diff[:,None], max_probas[:,None]), axis=-1
         )
         delay_cost = self.alpha * self.models_input_lengths[time_idx] / self.max_length
         costs = 1 - max_probas + delay_cost
@@ -1068,8 +1069,8 @@ class CALIMERA:
                 timestamps.append(self.models_input_lengths[time_idx])
 
         triggers, costs = [], []
-        trigger = False
         for i, probas in enumerate(X_probas):
+            trigger = False
             time_idx = np.where(timestamps[i] == self.models_input_lengths)[0][0]
             X_trigger, _ = self._generate_features(probas[None,:], time_idx, 
                                                    np.zeros(X.shape[0], dtype=int))

@@ -28,7 +28,7 @@ def create_cost_matrices(
         timestamps, 
         misclassification_cost, 
         delay_cost=None, 
-        alpha=1/2,
+        alpha=1/4,
         cost_function=None):
     """
     A function that converts a separated misclassification matrix and a delay cost function to an array of cost_matrices
@@ -604,9 +604,13 @@ class EarlyClassifier:
         """
 
         # DEFINE THE SEPARATION INDEX FOR VALIDATION DATA
-        X_clf, X_trigger, y_clf, y_trigger = train_test_split(
-            X, y, test_size=(1-val_proportion), random_state=self.random_state
-        )
+        if val_proportion != 0:
+            X_clf, X_trigger, y_clf, y_trigger = train_test_split(
+                X, y, test_size=(1-val_proportion), random_state=self.random_state
+            )
+        else:
+            X_clf = X_trigger = X
+            y_clf = y_trigger = y
         
         # FIT CLASSIFIERS
         if self.chronological_classifiers is not None:
@@ -640,8 +644,8 @@ class EarlyClassifier:
             #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
             #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
             #self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
-            #self.trigger_model = ECTS(self.chronological_classifiers.models_input_lengths, support=0, relaxed=False, n_jobs=3)
-            self.trigger_model = CALIMERA(self.cost_matrices, self.chronological_classifiers.models_input_lengths, alpha=1/2)
+            #self.trigger_model = ECTS(self.chronological_classifiers.models_input_lengths, support=0, relaxed=False, n_jobs=1)
+            self.trigger_model = CALIMERA(self.cost_matrices, self.chronological_classifiers.models_input_lengths, alpha=1/4)
 
         self._fit_trigger_model(X_trigger, y_trigger)
         # self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
