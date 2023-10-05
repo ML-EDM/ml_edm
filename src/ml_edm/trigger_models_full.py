@@ -237,11 +237,8 @@ class EDSC:
 class ECTS:
 
     """
-    The ECTS algorithm.
-
-    Publications:
-
     Early classification on time series(2012)
+    Inspired by : https://github.com/Eukla/ETS/blob/master/ets/algorithms/ects.py
     """
 
     def __init__(self, 

@@ -27,7 +27,7 @@ def create_cost_matrices(
         timestamps, 
         misclassification_cost, 
         delay_cost=None, 
-        alpha=1/4,
+        alpha=1/2,
         cost_function=None):
     """
     A function that converts a separated misclassification matrix and a delay cost function to an array of cost_matrices
@@ -638,13 +638,13 @@ class EarlyClassifier:
             #self.trigger_model = StoppingRule(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
             #                                  stopping_rule="SR1", n_jobs=2)
             #self.trigger_model = TEASER(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
-            #                            objective='avg_cost', n_jobs=1)
+            #                            objective='hmean', n_jobs=1)
             #self.trigger_model = ECEC(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=2)
             #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
             #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
             #self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
             #self.trigger_model = ECTS(self.chronological_classifiers.models_input_lengths, support=0, relaxed=False, n_jobs=1)
-            self.trigger_model = CALIMERA(self.cost_matrices, self.chronological_classifiers.models_input_lengths, alpha=1/4)
+            self.trigger_model = CALIMERA(self.cost_matrices, self.chronological_classifiers.models_input_lengths)
 
         self._fit_trigger_model(X_trigger, y_trigger)
         # self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE

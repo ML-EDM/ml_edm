@@ -49,13 +49,13 @@ def test():
     clf = WEASEL(support_probabilities=True)
 
     ec = EarlyClassifier(misclassification_cost, delay_cost, 
-                     nb_intervals=5, 
+                     nb_intervals=9, 
                      nb_classifiers=24,
                      base_classifier=xgb.XGBClassifier(),
                      min_length=1,
                      trigger_model=None)
     ec.fit(train_x, train_y, val_proportion=0.7)
-
+ 
     score(ec, test_x, test_y)
 
     test_x_with_one_ts = [ts[:1] for ts in test_x]
@@ -99,7 +99,7 @@ def score(ec, X_test, y_test):
     #avg_cost = np.mean(all_costs)
     med_t_star = np.median(all_t_star)
 
-    avg_cost = average_cost(acc, earl, 1/4)
+    avg_cost = average_cost(acc, earl, 1/2)
 
     return acc, earl, avg_cost
 

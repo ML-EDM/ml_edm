@@ -438,7 +438,7 @@ class EconomyGamma:
             for t in range(np.nonzero(self.models_input_lengths == timestamps[n])[0][0],
                            len(self.models_input_lengths)):
                 
-                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t])
+                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t]) ## à modifier
                 prediction_forecasted_costs.append(cost)
                 if t != len(self.models_input_lengths) - 1:
                     gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
@@ -649,11 +649,11 @@ class TEASER:
                     final_t_star = np.where(final_t_star == -1, t, final_t_star)
             
             if self.objective == 'hmean':
-                minus_acc = 1 - (final_pred == y).mean()
-                earliness = (np.mean(final_t_star) / self.max_length)
-
-                if best_obj > hmean((minus_acc, earliness)):
-                    best_obj = hmean((minus_acc, earliness))
+                acc = (final_pred == y).mean()
+                earliness = 1 - (np.mean(final_t_star) / self.max_length)
+                # minimize inverse of highest hmean
+                if best_obj > -hmean((acc, earliness)):
+                    best_obj = -hmean((acc, earliness))
                     self.best_v = v
             else:
                 t_idx = [
@@ -992,16 +992,18 @@ class ECDIRE:
 
 
 class CALIMERA:
-
+    """
+    CALIMERA: A new early time series classification method
+    Inspired by : https://github.com/JakubBilski/CALIMERA 
+    """
     def __init__(self,
                  cost_matrices,
                  models_input_lengths,
-                 alpha,
                  n_jobs=1):
         
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
-        self.alpha = alpha
+        #self.alpha = alpha
 
         self.n_jobs = n_jobs
     
@@ -1014,12 +1016,14 @@ class CALIMERA:
         features = np.concatenate(
             (probas, diff[:,None], max_probas[:,None]), axis=-1
         )
-        delay_cost = self.alpha * self.models_input_lengths[time_idx] / self.max_length
-        costs = 1 - max_probas + delay_cost
-
-        #preds = probas.argmax(axis=-1)
-        #costs = [self.cost_matrices[time_idx][pred][y[i]]
-        #         for i, pred in enumerate(preds)]
+        #delay_cost = self.alpha * self.models_input_lengths[time_idx] / self.max_length
+        #costs = 1 - max_probas + delay_cost
+        
+        proba_correct = np.mean(np.diagonal(self.cost_matrices[time_idx])) * max_probas
+        non_diag = self.cost_matrices[time_idx] - \
+            (np.eye(self.n_classes) * np.diagonal(self.cost_matrices[time_idx]))
+        proba_incorrect = np.sum(non_diag) / (self.n_classes**2 - self.n_classes) * (1-max_probas)
+        costs = proba_correct + proba_incorrect
 
         return features, costs
     
@@ -1027,6 +1031,7 @@ class CALIMERA:
 
         self.max_length = X.shape[1]
         self.max_timestamp = len(self.models_input_lengths)
+        self.n_classes = len(np.unique(y))
 
         results  = [self._generate_features(X_probas[:,t,:], t, y) 
                     for t in range(X_probas.shape[1])]
