@@ -55,14 +55,15 @@ def test():
                      min_length=1,
                      trigger_model=None)
     ec.fit(train_x, train_y, val_proportion=0.7)
- 
+    
+    t_post, f_post = ec.get_post(test_x, test_y, use_probas=True)
+    dict_res = ec.score(test_x, test_y, return_metrics=True)
     score(ec, test_x, test_y)
 
     test_x_with_one_ts = [ts[:1] for ts in test_x]
     classes, probas, triggers, costs = ec.predict(test_x_with_one_ts)
 
     print(costs)
-
 
 def score(ec, X_test, y_test):
 
@@ -99,7 +100,7 @@ def score(ec, X_test, y_test):
     #avg_cost = np.mean(all_costs)
     med_t_star = np.median(all_t_star)
 
-    avg_cost = average_cost(acc, earl, 1/2)
+    avg_cost = average_cost(acc, earl, 1/10)
 
     return acc, earl, avg_cost
 

@@ -2,14 +2,17 @@ import copy
 import numpy as np
 import pandas as pd
 
-from deep_classifiers import DeepChronologicalClassifier
+from deep.deep_classifiers import DeepChronologicalClassifier
 from dataset import extract_features, get_time_series_lengths
+from cost_matrice import CostMatrices
 from trigger_models import *
 from trigger_models_full import *
 from utils import *
+from metrics import average_cost
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
+from sklearn.calibration import CalibratedClassifierCV
 
 from warnings import warn
 
@@ -133,6 +136,7 @@ class ChronologicalClassifiers:
                  classifiers=None,
                  min_length=1,
                  feature_extraction=False, # TODO: make this True once a better feature extraction is implemented.
+                 calibration=True,
                  random_state=44):  
         
         self.nb_classifiers = nb_classifiers
@@ -144,6 +148,7 @@ class ChronologicalClassifiers:
         self.classifiers = classifiers
 
         self.feature_extraction = feature_extraction
+        self.calibration = calibration
         self.random_state = random_state
 
         self.max_length = None
@@ -167,7 +172,7 @@ class ChronologicalClassifiers:
             "feature_extraction": self.feature_extraction,
             "class_prior": self.class_prior,
             "classes_": self.classes_,
-            "max_series_length": self.max_series_length,
+            "max_series_length": self.max_length,
         }
 
     def fit(self, X, y, *args, **kwargs):
@@ -303,8 +308,14 @@ class ChronologicalClassifiers:
         for i, ts_length in enumerate(self.models_input_lengths):
             Xt = X[:, :ts_length]
             if self.feature_extraction:
-                Xt = extract_features(Xt)         
-            self.classifiers[i].fit(Xt, y, *args, **kwargs)
+                Xt = extract_features(Xt)
+            Xt_clf, X_calib, y_clf, y_calib = train_test_split(Xt, y, test_size=0.3, 
+                                                               random_state=self.random_state)         
+            self.classifiers[i].fit(Xt_clf, y_clf, *args, **kwargs)
+            
+            if self.calibration:
+                calib_clf = CalibratedClassifierCV(self.classifiers[i], cv='prefit')
+                self.classifiers[i] = calib_clf.fit(X_calib, y_calib)
 
         # GETTING PRIOR PROBABILITIES
         try:
@@ -492,7 +503,6 @@ class EarlyClassifier:
                  misclassification_cost,
                  delay_cost,
                  nb_classifiers=None,
-                 nb_intervals=5,
                  base_classifier=HistGradientBoostingClassifier(),
                  learned_timestamps_ratio=None,
                  min_length=1,
@@ -506,9 +516,7 @@ class EarlyClassifier:
         self._nb_classifiers = nb_classifiers
         self._learned_timestamps_ratio = learned_timestamps_ratio
         self._base_classifier = base_classifier
-
         self._min_length = min_length
-        self._nb_intervals = nb_intervals
 
         self.chronological_classifiers = chronological_classifiers
         self.trigger_model = trigger_model
@@ -516,6 +524,10 @@ class EarlyClassifier:
 
     # Properties are used to give direct access to the 
     # chronological classifiers and trigger models arguments.
+    @property
+    def models_input_lengths(self):
+        return self.chronological_classifiers.models_input_lengths
+    
     @property
     def nb_classifiers(self):
         return self.chronological_classifiers.nb_classifiers
@@ -539,14 +551,7 @@ class EarlyClassifier:
     @base_classifier.setter
     def base_classifier(self, value):
         self.base_classifier = value
-
-    @property
-    def nb_intervals(self):
         return self.trigger_model.nb_intervals
-
-    @nb_intervals.setter
-    def nb_intervals(self, value):
-        self.nb_intervals = value
     
     @property
     def min_length(self):
@@ -566,14 +571,13 @@ class EarlyClassifier:
             "misclassification_cost": self.misclassification_cost,
             "delay_cost": self.delay_cost,
             "cost_matrices": self.trigger_model.cost_matrices,
-            "nb_intervals": self.trigger_model.nb_intervals,
             "aggregation_function": self.trigger_model.aggregation_function,
             "thresholds": self.trigger_model.thresholds,
             "transition_matrices": self.trigger_model.transition_matrices,
             "confusion_matrices": self.trigger_model.confusion_matrices,
             "feature_extraction": self.chronological_classifiers.feature_extraction,
             "class_prior": self.chronological_classifiers.class_prior,
-            "max_series_length": self.chronological_classifiers.max_series_length,
+            "max_length": self.chronological_classifiers.max_length,
             "classes_": self.chronological_classifiers.classes_,
             "multiclass": self.trigger_model.multiclass,
             "initial_cost": self.trigger_model.initial_cost,
@@ -589,7 +593,7 @@ class EarlyClassifier:
         self.trigger_model.fit(X, X_pred, y)
         #self.trigger_model.fit(X, y)
 
-    def fit(self, X, y, val_proportion=.7):
+    def fit(self, X, y, trigger_proportion=0.3):
         """
         Parameters:
             X: np.ndarray
@@ -603,9 +607,9 @@ class EarlyClassifier:
         """
 
         # DEFINE THE SEPARATION INDEX FOR VALIDATION DATA
-        if val_proportion != 0:
+        if trigger_proportion != 0:
             X_clf, X_trigger, y_clf, y_trigger = train_test_split(
-                X, y, test_size=(1-val_proportion), random_state=self.random_state
+                X, y, test_size=trigger_proportion, random_state=self.random_state
             )
         else:
             X_clf = X_trigger = X
@@ -631,20 +635,24 @@ class EarlyClassifier:
                 raise ValueError(
                     "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
         else:
-            self.cost_matrices = create_cost_matrices(self.chronological_classifiers.models_input_lengths,
-                                                 self.misclassification_cost, self.delay_cost, cost_function="sum")
-            #self.trigger_model = EconomyGamma(self.cost_matrices, self.chronological_classifiers.models_input_lengths,
-            #                                  self._nb_intervals)
-            #self.trigger_model = StoppingRule(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
-            #                                  stopping_rule="SR1", n_jobs=2)
-            #self.trigger_model = TEASER(self.cost_matrices, self.chronological_classifiers.models_input_lengths, 
+            #self.cost_matrices = create_cost_matrices(self.models_input_lengths,
+            #                                     self.misclassification_cost, self.delay_cost, cost_function="sum")
+            self.cost_matrices = CostMatrices(timestamps=self.models_input_lengths,
+                                              n_classes=len(np.unique(y)), alpha=1/2)
+            self.trigger_model = EconomyGamma(self.cost_matrices, self.models_input_lengths,
+                                              nb_intervals=5)
+            #self.trigger_model = StoppingRule(self.cost_matrices, self.models_input_lengths, 
+            #                                  stopping_rule="SR1", objective="hmean", n_jobs=2)
+            #self.trigger_model = TEASER(self.cost_matrices, self.models_input_lengths, 
             #                            objective='hmean', n_jobs=1)
-            #self.trigger_model = ECEC(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=2)
-            #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.chronological_classifiers.models_input_lengths, n_jobs=1)
+            #self.trigger_model = ECEC(self.cost_matrices, self.models_input_lengths, 
+            #                          objective="hmean", n_jobs=2)
+            #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.models_input_lengths, 
+            #                                          objective="avg_cost", n_jobs=1)
             #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
             #self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
-            #self.trigger_model = ECTS(self.chronological_classifiers.models_input_lengths, support=0, relaxed=False, n_jobs=1)
-            self.trigger_model = CALIMERA(self.cost_matrices, self.chronological_classifiers.models_input_lengths)
+            #self.trigger_model = ECTS(self.models_input_lengths, support=0, relaxed=False, n_jobs=1)
+            #self.trigger_model = CALIMERA(self.cost_matrices, self.models_input_lengths)
 
         self._fit_trigger_model(X_trigger, y_trigger)
         # self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
@@ -685,3 +693,78 @@ class EarlyClassifier:
         #costs = None
 
         return classes, probas, triggers, costs
+
+    def score(self, X, y, return_metrics=False):
+
+        past_trigger = np.zeros((X.shape[0], )).astype(bool)
+        trigger_mask = np.zeros((X.shape[0], )).astype(bool)
+
+        all_preds = np.zeros((X.shape[0], )) - 1
+        all_t_star = copy.deepcopy(all_preds)
+        all_f_star = copy.deepcopy(all_preds)
+
+        for t, l in enumerate(self.models_input_lengths):
+
+            classes, _, triggers, _ = self.predict(X[:, :l])
+            
+            trigger_mask = triggers
+            # already made predictions
+            if past_trigger.sum() != 0: 
+                trigger_mask[np.where(past_trigger==True)] = False
+
+            all_preds[trigger_mask] = classes[trigger_mask]
+            all_t_star[trigger_mask] = l
+            all_f_star[trigger_mask] = np.array([self.cost_matrices[t][p][y[trigger_mask][i]]
+                                                 for i, p in enumerate(classes[trigger_mask])])
+
+            # update past triggers with current triggers
+            past_trigger = past_trigger | triggers
+
+            # if all TS have been triggered 
+            if past_trigger.sum() == X.shape[0]:
+                break
+
+            if l == self.chronological_classifiers.models_input_lengths[-1]:
+                all_t_star[np.where(all_t_star < 0)] = l
+                all_preds[np.where(all_preds < 0)] = classes[np.where(all_preds < 0)]
+                all_f_star[np.where(all_preds < 0)] = np.array([self.cost_matrices[-1][p][y[i]]
+                                                                for i, p in classes[np.where(all_preds < 0)]])
+        
+        acc = (all_preds==y).mean()
+        earl = np.mean(all_t_star) / X.shape[1]
+        avg_score = np.mean(all_f_star)
+        #avg_score = average_cost(acc, earl, self.cost_matrices.alpha)
+
+        if return_metrics:
+            return {
+                "accuracy": acc,
+                "earliness": earl,
+                "average_cost": avg_score,
+                "harmonic_mean": hmean((acc, 1-earl)),
+                "t_star": all_t_star,
+                "f_star": all_f_star
+            }
+
+        return (avg_score, acc, earl) 
+    
+    def get_post(self, X, y, use_probas=False):
+
+        all_f = np.zeros((len(self.models_input_lengths), len(y)))
+
+        for t, l in enumerate(self.models_input_lengths):
+            classes, probas, _, _ = self.predict(X[:, :l])
+            if use_probas:
+                all_f[t] = np.array(
+                    [self.cost_matrices[t][:][y[i]] * probas[i] for i in range(len(y))]
+                ).sum(axis=1)
+            else:
+                all_f[t] = [self.cost_matrices[t][int(p)][y[i]]
+                            for i, p in enumerate(classes)]
+        
+        t_post_idx = all_f.argmin(axis=0)
+        all_t_post = [self.models_input_lengths[idx]
+                      for idx in t_post_idx]
+        
+        all_f_post = [f[t_post_idx[i]] for i, f in enumerate(all_f.T)]
+
+        return all_t_post, all_f_post

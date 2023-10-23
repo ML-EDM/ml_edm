@@ -24,11 +24,13 @@ class ProbabilityThreshold:
     def __init__(self,
                 cost_matrices,
                 models_input_lengths,
+                objective="avg_cost",
                 manual_threshold=None,
                 n_jobs=1):
         
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
+        self.objective = objective
 
         if manual_threshold is not None:
             self.opt_threshold = manual_threshold
@@ -41,25 +43,23 @@ class ProbabilityThreshold:
         for i, probas in enumerate(X_probas):
             for j in range(len(self.models_input_lengths)):
                 trigger = (np.max(probas[j]) >= threshold)
-                if trigger:
+
+                if trigger or j==len(self.models_input_lengths)-1:
                     pred = np.argmax(probas[j])
-                    costs.append(
-                        self.cost_matrices[j][pred][y[i]]
-                    )
+                    c = self.cost_matrices[j][pred][y[i]] if self.objective=="avg_cost" \
+                            else (self.cost_matrices.missclf_cost[j][pred][y[i]], self.cost_matrices.delay_cost[j][pred][y[i]])
+                    costs.append(c)
                     break
 
-                if j==len(self.models_input_lengths)-1:
-                    pred = np.argmax(probas[j])
-                    costs.append(
-                        self.cost_matrices[j][pred][y[i]]
-                    )
-
-        if isinstance(costs[0], np.void):
-            minus_acc  = np.mean([c[0] for c in costs])
-            earliness = np.mean([c[1] for c in costs])
-            agg_cost = hmean((minus_acc, earliness))
-        else:
+        if self.objective=="avg_cost":
             agg_cost = np.mean(costs)
+        elif self.objective=="hmean":
+            # normalize as hmean only takes rates as input 
+            acc  = 1 - np.mean([c[0] for c in costs]) / np.max(self.cost_matrices.missclf_cost)
+            earliness = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
+            agg_cost = -hmean((acc, earliness)) # minimize inverse 
+        else:
+            raise ValueError("Unknown objective function, should be one of ['avg_cost', 'hmean']")
 
         return agg_cost
         
@@ -188,7 +188,68 @@ class EconomyGamma:
             "initial_cost": self.initial_cost,
             "multiclass": self.multiclass,
         }
+    
+    def _get_confusion_matrices(self, X_probas, X_intervals, y, nb_intervals):
 
+        X_class = X_probas.argmax(axis=-1).T
+        confusion_matrices = [] # shape (T, K, P, P)
+        for t, timestamp_data in enumerate(X_class):
+            group_data = [(timestamp_data[X_intervals[t] == k], y[X_intervals[t] == k]) 
+                          for k in range(nb_intervals)]
+            confusion = np.array(
+                [confusion_matrix(y_true, y_pred, normalize='all', labels=self.classes_)
+                for y_pred, y_true in group_data]
+            )
+            confusion_matrices.append(confusion)
+
+        # Fix nans created by division by 0 when not enough data
+        confusion_matrices = np.nan_to_num(
+            confusion_matrices, nan=1/np.square(len(self.classes_))
+        )
+        return confusion_matrices
+
+    def _get_transitions_matrices(self, X_intervals, nb_intervals):
+
+        # Obtain transition_matrices, Shape (T-1, K, K)
+        transition_matrices = []
+        for t in range(len(self.models_input_lengths)-1):
+            transition_matrices.append(
+                np.array(
+                    [np.array([np.sum((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(nb_intervals)]) /
+                        np.sum(X_intervals[t] == i) for i in range(nb_intervals)]
+                )
+            )
+        # fix nans created by division by 0 when not enough data
+        transition_matrices = np.nan_to_num(transition_matrices, nan=1/nb_intervals)
+
+        return transition_matrices
+    
+    def _get_costs(self, groups, timestamp, nb_intervals):
+
+        for group in groups:
+            costs = []
+            # If series length is not covered return initial cost? Else estimate cost
+            if timestamp < np.min(self.models_input_lengths):
+                costs.append(self.initial_cost)
+                timestamp = np.min(self.models_input_lengths)
+                gamma = np.repeat(1/nb_intervals, nb_intervals)
+            else:
+                gamma = np.zeros(nb_intervals)  # interval membership probability vector
+                gamma[group] = 1
+        
+            for t in range(np.nonzero(self.models_input_lengths == timestamp)[0][0], len(self.models_input_lengths)):
+                
+                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t])
+                costs.append(cost)
+                if t != len(self.models_input_lengths) - 1:
+                    gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
+
+            timestamp += 1
+            if np.argmin(costs) == 0:
+                break
+
+        return np.array(costs)
+    
     def fit(self, X, X_probas, y, classes_=None):
         """
         Fit the trigger model based on the predictions probabilities obtained by classifying time series of progressive
@@ -206,6 +267,7 @@ class EconomyGamma:
 
         # DATA VALIDATION / INTEGRITY
         # cost_matrices
+        """
         if isinstance(self.cost_matrices, list):
             self.cost_matrices = np.array(self.cost_matrices)
         elif not isinstance(self.cost_matrices, np.ndarray):
@@ -216,6 +278,7 @@ class EconomyGamma:
             raise ValueError(
                 "Argument 'cost_matrices' should be an array of shape (T,Y,Y) with T the number of timestamps and Y"
                 "the number of classes.")
+        """
 
         # models_input_lengths
         if isinstance(self.models_input_lengths, list):
@@ -230,15 +293,14 @@ class EconomyGamma:
         if len(np.unique(self.models_input_lengths)) != len(self.models_input_lengths):
             self.models_input_lengths = np.unique(self.models_input_lengths)
             warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
-        if self.models_input_lengths.shape[0] != self.cost_matrices.shape[0]:
+        if self.models_input_lengths.shape[0] != len(self.cost_matrices):
             raise ValueError("Argument 'cost_matrices' should have as many matrices as there are values in argument "
                              "'models_input_lengths'.")
 
         # nb_intervals
-        if not isinstance(self.nb_intervals, int):
-            raise TypeError("Argument nb_intervals should be a strictly positive int.")
-        if self.nb_intervals < 1:
-            raise ValueError("Argument nb_intervals should be a strictly positive int.")
+        #if self.nb_intervals < 1:
+        #    raise ValueError("Argument nb_intervals should be a strictly positive int.")
+        
         if not callable(self.aggregation_function):
             if not isinstance(self.aggregation_function, str):
                 raise TypeError("Argument 'aggregation_function' should either be a string or a callable function.")
@@ -262,7 +324,7 @@ class EconomyGamma:
                             "number of time series, T the number of input lengths that were used for prediction and P "
                             "the predicted class probabilities vectors.")
 
-        if X_probas.shape[2] != self.cost_matrices.shape[1]:
+        if X_probas.shape[2] != len(np.unique(y)):
             raise ValueError("X_probas probability vectors should have the same number of classes as the "
                              "cost matrices.")
         if len(X_probas) == 0:
@@ -315,51 +377,51 @@ class EconomyGamma:
         ) if self.multiclass else X_probas[:, :, 0]
 
         # Obtain thresholds for each group : X_sorted shape (T, N), values = sorted aggregated value
+        # Grid-search over values of K if param not given
         X_sorted = np.sort(X_aggregated.T)
-        thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_intervals + 1)[1:-1].astype(int)
-        self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)
+        if isinstance(self.nb_intervals, int):
+            k_candidates = [self.nb_intervals]
+        elif isinstance(self.nb_intervals, list):
+            k_candidates = self.nb_intervals
+        else:
+            k_candidates = np.arange(1, 21)
+        
+        opt_costs = np.inf
+        for k in  k_candidates:
+            thresholds_indices = np.linspace(0, X_sorted.shape[1], k+1)[1:-1].astype(int)
+            self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)
 
-        # Get intervals given threshold : shape (T, N), values = group ID of each pred
-        X_intervals = np.array(
-            [[np.sum([threshold <= x for threshold in self.thresholds[i]]) 
-              for x in timestamp_data] for i, timestamp_data in enumerate(X_aggregated.T)]
-        )
-
-        # Obtain transition_matrices, Shape (T-1, K, K)
-        self.transition_matrices = []
-        for t in range(len(self.models_input_lengths) - 1):
-            self.transition_matrices.append(
-                np.array(
-                    [np.array([np.sum((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(self.nb_intervals)]) /
-                        np.sum(X_intervals[t] == i) for i in range(self.nb_intervals)]
-                )
+            # Get intervals given threshold : shape (T, N), values = group ID of each pred
+            X_intervals = np.array(
+                [[np.sum([threshold <= x for threshold in self.thresholds[i]]) 
+                for x in timestamp_data] for i, timestamp_data in enumerate(X_aggregated.T)]
             )
-        # fix nans created by division by 0 when not enough data
-        self.transition_matrices = np.nan_to_num(self.transition_matrices, nan=1/self.nb_intervals)
 
-        # Obtain confusion matrices : X_class shape (T, N) values = class of each prediction
-        X_class = np.apply_along_axis(np.argmax, 2, X_probas).T
-        self.confusion_matrices = [] # shape (T, K, P, P)
-        for t, timestamp_data in enumerate(X_class):
-
-            group_data = [(timestamp_data[X_intervals[t] == k], y[X_intervals[t] == k]) 
-                          for k in range(self.nb_intervals)]
-            confusion = np.array(
-                [np.array(
-                    [[np.sum((x_ == np.nonzero(self.classes_ == j)[0][0]) & (y_ == np.nonzero(self.classes_ == i)[0][0]))
-                      for j in self.classes_] for i in self.classes_]
-                ) / len(y_) for x_, y_ in group_data]
+            self.transition_matrices = self._get_transitions_matrices(X_intervals, k)
+            self.confusion_matrices = self._get_confusion_matrices(X_probas, X_intervals, y, k)
+            
+            mean_costs = np.mean(
+                [self._get_costs(group-1, self.models_input_lengths[0], k)[0]
+                 for group in X_intervals.T])
+            
+            if mean_costs < opt_costs:
+                opt_costs = mean_costs
+                self.nb_intervals = k
+        
+        if k != self.nb_intervals:
+            thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_intervals+1)[1:-1].astype(int)
+            self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)
+            X_intervals = np.array(
+                [[np.sum([threshold <= x for threshold in self.thresholds[i]]) 
+                for x in timestamp_data] for i, timestamp_data in enumerate(X_aggregated.T)]
             )
-            self.confusion_matrices.append(confusion)
-
-        # Fix nans created by division by 0 when not enough data
-        self.confusion_matrices = np.nan_to_num(
-            self.confusion_matrices, nan=1/np.square(len(self.classes_))
-        )
+            self.transition_matrices = self._get_transitions_matrices(X_intervals, self.nb_intervals)
+            self.confusion_matrices = self._get_confusion_matrices(X_probas, X_intervals, y, self.nb_intervals)
 
         return self
 
     def predict(self, X, X_probas):
+
         """
         Given a list of N predicted class probabilities vectors, predicts whether it is the right time to trigger the
         prediction as well as the expected costs of delaying the decisions. Predictions whose time series' input length
@@ -393,8 +455,11 @@ class EconomyGamma:
         for ts in X:
             diff = self.models_input_lengths - len(ts)
             if 0 not in diff:
-                truncated = True
-                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                if (diff > 0).sum() == len(diff):
+                    timestamps.append(0)
+                    continue
+                else:
+                    time_idx = np.where(diff > 0, diff, -np.inf).argmax()
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
             timestamps.append(self.models_input_lengths[time_idx])
@@ -410,41 +475,17 @@ class EconomyGamma:
             if timestamps[i] < np.min(self.models_input_lengths):
                 interval = np.nan
             else:
-                interval = np.sum([threshold <= x 
-                                   for threshold in self.thresholds[
-                                       np.nonzero(self.models_input_lengths == timestamps[i])[0][0]
-                                    ]]
-                            )
+                interval = np.sum(
+                    [threshold <= x for threshold in self.thresholds[
+                    np.nonzero(self.models_input_lengths == timestamps[i])[0][0]]]
+                )
                 X_intervals.append(interval)
 
         # CALCULATE AND RETURN COSTS
         triggers, costs = [], []
         returned_priors = False
         for n, group in enumerate(X_intervals):
-
-            prediction_forecasted_costs = []
-
-            # If series length is not covered return initial cost? Else estimate cost
-            if timestamps[n] < np.min(self.models_input_lengths):
-                prediction_forecasted_costs.append(self.initial_cost)
-                timestamps[n] = np.min(self.models_input_lengths)
-                gamma = np.repeat(1 / self.nb_intervals, self.nb_intervals)
-                returned_priors = True
-            else:
-                gamma = np.zeros(self.nb_intervals)  # interval membership probability vector
-                gamma[group] = 1
-
-            # Estimate cost for each length from prediction length to max_length
-            for t in range(np.nonzero(self.models_input_lengths == timestamps[n])[0][0],
-                           len(self.models_input_lengths)):
-                
-                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t]) ## à modifier
-                prediction_forecasted_costs.append(cost)
-                if t != len(self.models_input_lengths) - 1:
-                    gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
-
-            # Save estimated costs and determine trigger time
-            prediction_forecasted_costs = np.array(prediction_forecasted_costs)
+            prediction_forecasted_costs = self._get_costs([group], timestamps[n], self.nb_intervals)
             prediction_forecasted_trigger = True if np.argmin(prediction_forecasted_costs) == 0 else False
             triggers.append(prediction_forecasted_trigger)
             costs.append(prediction_forecasted_costs)
@@ -474,12 +515,14 @@ class StoppingRule:
                  cost_matrices,
                  models_input_lengths,
                  stopping_rule="SR1",
+                 objective="avg_cost",
                  n_jobs=1):
         
         super().__init__()
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
         self.stopping_rule = stopping_rule
+        self.objective = objective
         self.n_jobs = n_jobs
 
     def _trigger(self, gammas, probas, t):
@@ -502,17 +545,23 @@ class StoppingRule:
         for i in range(len(X_probas)):
             for j, t in enumerate(self.models_input_lengths):
                 trigger = self._trigger(gammas, X_probas[i][j], t)
+
                 if trigger:
                     pred = np.argmax(X_probas[i][j])
-                    costs.append(self.cost_matrices[j][pred][y[i]])
+                    c = self.cost_matrices[j][pred][y[i]] if self.objective=="avg_cost" \
+                            else (self.cost_matrices.missclf_cost[j][pred][y[i]], self.cost_matrices.delay_cost[j][pred][y[i]])
+                    costs.append(c)
                     break
         
-        if isinstance(costs[0], np.void):
-            minus_acc  = np.mean([c[0] for c in costs])
-            earliness = np.mean([c[1] for c in costs])
-            agg_cost = hmean((minus_acc, earliness))
-        else:
+        if self.objective=="avg_cost":
             agg_cost = np.mean(costs)
+        elif self.objective=="hmean":
+            # normalize as hmean only takes rates as input 
+            acc  = 1 - np.mean([c[0] for c in costs]) / np.max(self.cost_matrices.missclf_cost)
+            earliness = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
+            agg_cost = -hmean((acc, earliness)) # minimize inverse 
+        else:
+            raise ValueError("Unknown objective function, should be one of ['avg_cost', 'hmean']")
 
         return agg_cost
 
@@ -642,7 +691,7 @@ class TEASER:
                 if -1 not in final_pred:
                     break
                 
-                # if final timestep is reached samples that hasn't been 
+                # if final timestep is reached, samples that hasn't been 
                 # triggered yet are trigger 
                 if t == self.models_input_lengths[-1]:
                     final_pred = np.where(final_pred == -1, current_pred, final_pred)
@@ -717,11 +766,13 @@ class ECEC:
     def __init__(self,
                  cost_matrices,
                  models_input_lengths,
+                 objective="avg_cost",
                  n_jobs=1):
         
         super().__init__()
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
+        self.objective = objective
         self.n_jobs = n_jobs
         
     def _get_ratio(self, preds, y):
@@ -766,15 +817,20 @@ class ECEC:
             for j, c in enumerate(confidences):
                 if c >= threshold:
                     pred = X_pred[i][j]
-                    costs.append(self.cost_matrices[j][pred][y[i]])
+                    c = self.cost_matrices[j][pred][y[i]] if self.objective=="avg_cost" \
+                            else (self.cost_matrices.missclf_cost[j][pred][y[i]], self.cost_matrices.delay_cost[j][pred][y[i]])
+                    costs.append(c)
                     break
         
-        if isinstance(costs[0], np.void):
-            minus_acc  = np.mean([c[0] for c in costs])
-            earliness = np.mean([c[1] for c in costs])
-            agg_cost = hmean((minus_acc, earliness))
-        else:
+        if self.objective=="avg_cost":
             agg_cost = np.mean(costs)
+        elif self.objective=="hmean":
+            # normalize as hmean only takes rates as input 
+            acc  = 1 - np.mean([c[0] for c in costs]) / np.max(self.cost_matrices.missclf_cost)
+            earliness = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
+            agg_cost = -hmean((acc, earliness)) # minimize inverse 
+        else:
+            raise ValueError("Unknown objective function, should be one of ['avg_cost', 'hmean']")
 
         return agg_cost
 
@@ -1063,12 +1119,12 @@ class CALIMERA:
             if 0 not in diff:
                 if (diff > 0).sum() == len(diff):
                     timestamps.append(0)
+                    continue
                 else:
                     time_idx = np.where(diff > 0, diff, -np.inf).argmax()
-                    timestamps.append(self.models_input_lengths[time_idx])
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
-                timestamps.append(self.models_input_lengths[time_idx])
+            timestamps.append(self.models_input_lengths[time_idx])
 
         triggers, costs = [], []
         for i, probas in enumerate(X_probas):
