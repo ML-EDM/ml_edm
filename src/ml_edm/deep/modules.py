@@ -11,17 +11,22 @@ class LSTM(nn.Module):
                  hidden_dim, 
                  n_layers=1, 
                  dropout=0.2, 
+                 return_all_states=False,
                  *args, **kwargs):
         
         super(LSTM, self).__init__(*args, **kwargs)
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
-        
+        self.return_all_states = return_all_states
+
         self.lstm = nn.LSTM(input_dim, hidden_dim, num_layers=n_layers,
                             batch_first=True, dropout=dropout, *args, **kwargs)
     
     def forward(self, x):
-        return self.lstm(x)[0] # return all hidden states by def 
+        if self.return_all_states:
+            return self.lstm(x)[0] # return all hidden states by def 
+        else:
+            return self.lstm(x)[0][:,-1,:]
 
 class LSTM_FCN(nn.Module):
 

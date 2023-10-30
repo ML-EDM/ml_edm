@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
+from deep_models import *
 from modules import *
 
 class EarlyStopping:
@@ -33,6 +34,7 @@ class EarlyStopping:
 class DeepChronologicalClassifier:
 
     def __init__(self,
+                 model,
                  num_epochs=30,
                  batch_size=8,
                  optim_params={
@@ -47,7 +49,8 @@ class DeepChronologicalClassifier:
                  verbose=True,
                  models_input_lengths=None
     ):
-        
+        self.model = model
+
         self.num_epochs = num_epochs
         self.batch_size = batch_size
         self.optim_params = optim_params
@@ -59,6 +62,8 @@ class DeepChronologicalClassifier:
         self.verbose = verbose
 
         self.models_input_lengths = models_input_lengths
+
+        self.embed_trigger_model = False 
     
     def _truncate_series(self, X, y):
 
@@ -89,7 +94,7 @@ class DeepChronologicalClassifier:
 
         return data_iter
     
-    def _eval_model(self, X, y, criterion):
+    def _eval_model(self, X, y):
         
         val_losses = []
 
@@ -97,8 +102,13 @@ class DeepChronologicalClassifier:
         val_dataloader = self._truncate_series(X, y)
         for x_batch, y_batch in val_dataloader:
             
-            probas = self.model(x_batch.to(self.device))
-            loss = criterion(probas, y_batch)
+            try: # if deep model embed trigger model
+                probas, stopping = self.model(x_batch.to(self.device))
+                loss = self.model.compute_loss(probas, stopping, y_batch.to(self.device))
+            except ValueError: 
+                probas = self.model(x_batch.to(self.device))
+                loss = self.model.compute_loss(probas, y_batch.to(self.device))
+
             val_losses.append(loss.item())
 
         return np.mean(val_losses)
@@ -131,10 +141,9 @@ class DeepChronologicalClassifier:
         else:
             X_train, y_train = (X, y)
 
-        self.model = LSTM_FCN(self.n_dim, self.max_length, n_classes)
+        #self.model = LSTM_FCN(self.n_dim, self.max_length, n_classes)
         self.model.to(self.device)
         optimizer = opt.Adam(self.model.parameters(), **self.optim_params)
-        criterion = nn.CrossEntropyLoss()
 
         self.train_losses, self.val_losses = [], []
         pbar = tqdm(range(self.num_epochs)) if self.verbose \
@@ -148,8 +157,14 @@ class DeepChronologicalClassifier:
             for x_batch, y_batch in train_dataloader:
                 self.model.train()
                 optimizer.zero_grad()
-                probas = self.model(x_batch.to(self.device))
-                loss = criterion(probas, y_batch.to(self.device))
+
+                if self.embed_trigger_model: # if deep model embed trigger model
+                    probas, stopping = self.model(x_batch.to(self.device))
+                    loss = self.model.compute_loss(probas, stopping, y_batch.to(self.device))
+                else: 
+                    probas = self.model(x_batch.to(self.device))
+                    loss = self.model.compute_loss(probas, y_batch.to(self.device))
+
                 loss.backward()
                 optimizer.step()
 
@@ -158,7 +173,7 @@ class DeepChronologicalClassifier:
 
             if self.early_stopping:
                 with torch.no_grad():
-                    val_loss = self._eval_model(X_val, y_val, criterion)
+                    val_loss = self._eval_model(X_val, y_val)
                 self.val_losses.append(val_loss.item())
 
                 early_stopper(val_loss.item())
@@ -273,12 +288,15 @@ class BucketBatchSampler(Sampler):
         for i in self.batch_list:
             yield i
     
-#m = LSTM_FCN(input_dim=1, seq_length=24, output_dim=2, hidden_dim=64)
-#clf = DeepChronologicalClassifier()
+backbone = LSTM(input_dim=1, hidden_dim=64)
+clf_head = ClassificationHead(hidden_dim=64, n_classes=2)
+model = ClassificationModel(backbone, clf_head)
 
-#x = torch.randn(((16,24,1)))
-#y = np.random.random_integers(0, 1, 16)
+clf = DeepChronologicalClassifier(model)
 
-#clf.fit(x, y)
+x = torch.randn(((16,24,1)))
+y = np.random.random_integers(0, 1, 16)
 
-#y = m(x)
+clf.fit(x, y)
+
+y = model(x)

@@ -4,16 +4,21 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class SimpleModel(nn.Module):
+class ClassificationModel(nn.Module):
 
     def __init__(self, backbone, classif_head):
-        super(SimpleModel, self).__init__()
+        super(ClassificationModel, self).__init__()
         self.backbone = backbone
         self.clf_head = classif_head
     
     def forward(self, x):
         x = self.backbone(x)
         return self.clf_head(x)
+
+    def compute_loss(self, probas, labels):
+        criterion = nn.CrossEntropyLoss()
+        loss = criterion(probas, labels)
+        return loss 
 
 class ELECTS(nn.Module):
 
@@ -79,10 +84,10 @@ class ELECTS(nn.Module):
         labels = torch.repeat_interleave(labels, sequence_length).view(batch_size, -1)
 
         prod = torch.cat(
-            (torch.ones((batch_size, 1)), (1 - probas_s[:, 1:]).cumprod(dim=1)), dim=-1
+            (torch.ones((batch_size, 1)), (1 - probas_stopping[:, 1:]).cumprod(dim=1)), dim=-1
         )
         pts = torch.cat(
-            (prod[:, :-1] * probas_s[:, 1:], prod[:, -1:]), dim=-1
+            (prod[:, :-1] * probas_stopping[:, 1:], prod[:, -1:]), dim=-1
         ) + self.epsilon / sequence_length
 
         criterion = nn.CrossEntropyLoss()
@@ -100,12 +105,19 @@ class ELECTS(nn.Module):
         return loss
 
 
+"""
 from modules import LSTM, ClassificationHead
 
 x = torch.randn((8, 24, 1))
 y = torch.randint(0, 2, (8,))
 
-model = ELECTS(1, LSTM(64, 128), ClassificationHead(128, 2), 10)
+model = ELECTS(1, LSTM(64, 128), ClassificationHead(128, 2), 0.5, 10)
 
-probas_c, probas_s = model(x)
-model.compute_loss(probas_c, probas_s, y)
+try:
+    probas_c, probas_s, a = model(x)
+except ValueError:
+    probas_c, probas_s = model(x)
+
+l = model.compute_loss(probas_c, probas_s, y)
+print(l)
+"""
