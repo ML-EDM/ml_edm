@@ -2,7 +2,7 @@ import copy
 import numpy as np
 import pandas as pd
 
-from deep.deep_classifiers import DeepChronologicalClassifier
+#from deep.deep_classifiers import DeepChronologicalClassifier
 from dataset import extract_features, get_time_series_lengths
 from cost_matrice import CostMatrices
 from trigger_models import *
@@ -129,9 +129,8 @@ class ChronologicalClassifiers:
     """
 
     def __init__(self,
-                 nb_classifiers=None,
                  base_classifier=None,
-                 learned_timestamps_ratio=None,
+                 sampling_ratio=None,
                  models_input_lengths=None,
                  classifiers=None,
                  min_length=1,
@@ -139,14 +138,13 @@ class ChronologicalClassifiers:
                  calibration=True,
                  random_state=44):  
         
-        self.nb_classifiers = nb_classifiers
         self.base_classifier = base_classifier
-        self.learned_timestamps_ratio = learned_timestamps_ratio
+        self.sampling_ratio = sampling_ratio
         self.models_input_lengths = models_input_lengths
 
-        self.min_length = min_length
         self.classifiers = classifiers
 
+        self.min_length = min_length
         self.feature_extraction = feature_extraction
         self.calibration = calibration
         self.random_state = random_state
@@ -166,8 +164,7 @@ class ChronologicalClassifiers:
             "classifiers": self.classifiers,
             "models_input_lengths": self.models_input_lengths,
             "base_classifier": self.base_classifier,
-            "nb_classifiers": self.nb_classifiers,
-            "learned_timestamps_ratio": self.learned_timestamps_ratio,
+            "sampling_ratio": self.sampling_ratio,
             "min_length": self.min_length,
             "feature_extraction": self.feature_extraction,
             "class_prior": self.class_prior,
@@ -191,19 +188,19 @@ class ChronologicalClassifiers:
         """
         # INPUT VALIDATION / INTEGRITY
         # time_series_learning_ratio compatibility
-        if self.learned_timestamps_ratio is not None:
-            if not isinstance(self.learned_timestamps_ratio, float) \
-                    and not isinstance(self.learned_timestamps_ratio, int):
+        self.max_length = X.shape[1]
+
+        if self.sampling_ratio is not None:
+            if not isinstance(self.sampling_ratio, float) \
+                    and not isinstance(self.sampling_ratio, int):
                 raise TypeError(
                     "Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
             
-            if self.learned_timestamps_ratio <= 0 or self.learned_timestamps_ratio > 1:
+            if self.sampling_ratio <= 0 or self.sampling_ratio > 1:
                 raise ValueError(
                     "Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
             
             incompatible = []
-            if self.nb_classifiers is not None:
-                incompatible.append('nb_classifiers')
             if self.models_input_lengths is not None:
                 incompatible.append('models_input_lengths')
             if self.classifiers is not None:
@@ -211,21 +208,26 @@ class ChronologicalClassifiers:
             if len(incompatible) > 0:
                 raise ValueError(
                     f"Argument 'learned_timestamps_ratio' is not compatible with arguments {incompatible}.")
+        else:
+            self.sampling_ratio = 0.05
+            warn("No sampling ratio provided, using default 5'%' sampling")
+            
+        self.nb_classifiers = np.minimum(int(1/self.sampling_ratio), self.max_length - self.min_length + 1)
 
         # base_classifier and classifier_list compatibility
         if self.base_classifier is not None:
             if self.classifiers is not None:
                 raise ValueError("Arguments 'base_classifier' and 'classifiers' are not compatible.")
+        else:
+            if self.classifiers is None:
+                self.base_classifier = HistGradientBoostingClassifier(random_state=self.random_state)
+                warn("Using 'base_classifier = HistGradientBoostingClassifier() by default.")
+        
+        if self.classifiers is None:
+            self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.nb_classifiers)]
 
         # Numerical coherence between arguments
         equal = []
-        if self.nb_classifiers is not None:
-            if not isinstance(self.nb_classifiers, int):
-                raise TypeError("Argument 'nb_classifiers' should be a strictly positive int.")
-            if self.nb_classifiers <= 0:
-                raise ValueError("Argument 'nb_classifiers' should be a strictly positive int.")
-            equal.append(('nb_classifiers', self.nb_classifiers))
-
         if self.classifiers is not None:
             if not isinstance(self.classifiers, list):
                 raise TypeError("Argument 'classifiers' should be a list of classifier objects.")
@@ -250,6 +252,13 @@ class ChronologicalClassifiers:
                 warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
             equal.append(('models_input_lengths', len(self.models_input_lengths)))
 
+        else:
+            self.models_input_lengths = list(set(
+                [int((self.max_length - self.min_length) * i / self.nb_classifiers) + self.min_length
+                 for i in range(1, self.nb_classifiers+1)]
+            ))
+            self.nb_classifiers = len(self.models_input_lengths)
+
         if len(equal) >= 2:
             for i in range(len(equal) - 1):
                 if equal[i][1] != equal[i + 1][1]:
@@ -261,48 +270,6 @@ class ChronologicalClassifiers:
 
         # Check X and y
         X, y = check_X_y(X, y)
-
-        # ASSIGNMENTS
-        # self.nb_classifiers
-        self.max_length = X.shape[1]
-        if self.nb_classifiers is None:
-            if self.classifiers is not None:
-                self.nb_classifiers = len(self.classifiers)
-            elif self.models_input_lengths is not None:
-                self.nb_classifiers = len(self.models_input_lengths)
-            elif self.learned_timestamps_ratio is not None:
-                self.nb_classifiers = int(self.learned_timestamps_ratio * self.max_length)
-                if self.nb_classifiers == 0:
-                    self.nb_classifiers = 1
-            else:
-                self.nb_classifiers = 20
-                print("Using 'nb_classifiers=20 by default.")
-
-        if self.nb_classifiers > self.max_length:
-            if self.classifiers is not None or self.models_input_lengths is not None:
-                raise ValueError(f"Not enough timestamps to learn {self.nb_classifiers} classifiers on")
-            
-            self.nb_classifiers = self.max_length
-            warn(f"Not enough timestamps to learn {self.nb_classifiers} classifiers on."
-                 f"Changing number of classifiers to {self.max_length}.")
-
-        # self.base_classifier
-        if self.base_classifier is None:
-            if self.classifiers is None:
-                self.base_classifier = HistGradientBoostingClassifier(random_state=self.random_state)
-                print("Using 'base_classifier = HistGradientBoostingClassifier() by default.")
-
-        if self.models_input_lengths is None:
-            self.models_input_lengths = list(set(
-                [int((self.max_length - self.min_length) * i / self.nb_classifiers) + self.min_length
-                 for i in range(1, self.nb_classifiers+1)]
-            ))
-            self.nb_classifiers = len(self.models_input_lengths)
-
-        self.models_input_lengths = np.sort(self.models_input_lengths)
-
-        if self.classifiers is None:
-            self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.nb_classifiers)]
 
         # FEATURE EXTRACTION AND FITTING
         for i, ts_length in enumerate(self.models_input_lengths):
@@ -416,7 +383,7 @@ class ChronologicalClassifiers:
                         truncated = True
                         break
 
-        # Feature extraction is done on the whole predictions dataset to gain time.
+        # Feature extraction is done on the whole predictions dataset to save time.
         if self.feature_extraction is True:
             X = extract_features(X)
             inputs_lengths = get_time_series_lengths(X)
@@ -500,26 +467,20 @@ class EarlyClassifier:
         Check documentation of ChronologicalClassifiers and EconomyGamma for more detail on these attributes.
     """
     def __init__(self,
-                 misclassification_cost,
-                 delay_cost,
-                 nb_classifiers=None,
-                 base_classifier=HistGradientBoostingClassifier(),
-                 learned_timestamps_ratio=None,
-                 min_length=1,
                  chronological_classifiers=None,
+                 prefit_classifiers=False, 
                  trigger_model=None,
+                 trigger_params={},
+                 cost_matrices=None,
                  random_state=44):
         
-        self.misclassification_cost = misclassification_cost
-        self.delay_cost = delay_cost
-
-        self._nb_classifiers = nb_classifiers
-        self._learned_timestamps_ratio = learned_timestamps_ratio
-        self._base_classifier = base_classifier
-        self._min_length = min_length
-
+        self.cost_matrices = cost_matrices
         self.chronological_classifiers = chronological_classifiers
+        self.prefit = prefit_classifiers
+
         self.trigger_model = trigger_model
+        self.trigger_params = trigger_params
+
         self.random_state = random_state
 
     # Properties are used to give direct access to the 
@@ -537,12 +498,12 @@ class EarlyClassifier:
         self.nb_classifiers = value
 
     @property
-    def learned_timestamps_ratio(self):
-        return self.chronological_classifiers.learned_timestamps_ratio
+    def sampling_ratio(self):
+        return self.chronological_classifiers.sampling_ratio
 
-    @learned_timestamps_ratio.setter
-    def learned_timestamps_ratio(self, value):
-        self.learned_timestamps_ratio = value
+    @sampling_ratio.setter
+    def sampling_ratio(self, value):
+        self.sampling_ratio = value
 
     @property
     def base_classifier(self):
@@ -567,9 +528,7 @@ class EarlyClassifier:
             "models_input_lengths": self.chronological_classifiers.models_input_lengths,
             "base_classifier": self.chronological_classifiers.base_classifier,
             "nb_classifiers": self.chronological_classifiers.nb_classifiers,
-            "learned_timestamps_ratio": self.chronological_classifiers.learned_timestamps_ratio,
-            "misclassification_cost": self.misclassification_cost,
-            "delay_cost": self.delay_cost,
+            "sampling_ratio": self.chronological_classifiers.sampling_ratio,
             "cost_matrices": self.trigger_model.cost_matrices,
             "aggregation_function": self.trigger_model.aggregation_function,
             "thresholds": self.trigger_model.thresholds,
@@ -621,42 +580,54 @@ class EarlyClassifier:
                 raise ValueError(
                     "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
         else:
-            self.chronological_classifiers = ChronologicalClassifiers(self._nb_classifiers,
-                                                                      self._base_classifier,
-                                                                      self._learned_timestamps_ratio,
-                                                                      min_length=self._min_length)
+            self.chronological_classifiers = ChronologicalClassifiers(
+                base_classifier=HistGradientBoostingClassifier(),
+                learned_timestamps_ratio=0.05,
+                min_length=1
+            )
             #self.chronological_classifiers = DeepChronologicalClassifier()
+        if not self.prefit:
+            self._fit_classifiers(X_clf, y_clf)
 
-        self._fit_classifiers(X_clf, y_clf)
+        # FIT TRIGGER MODEL
+        if not self.cost_matrices:
+            self.cost_matrices = CostMatrices(timestamps=self.models_input_lengths, 
+                                              n_classes=len(np.unique(y)), 
+                                              alpha=1.)
+            warn("No cost matrices defined, using alpha = 1 by default")
 
-        # OBTAIN COST MATRICES AND FIT TRIGGER MODEL
         if self.trigger_model is not None:
-            if not isinstance(self.trigger_model, EconomyGamma):
-                raise ValueError(
-                    "Argument 'trigger_model' should be an instance of class 'EconomyGamma'.")
+            if self.trigger_model == "economy":
+                self.trigger_model = EconomyGamma(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
+            elif self.trigger_model == "proba_threshold":
+                self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
+            elif self.trigger_model == "stopping_rule":
+                self.trigger_model = StoppingRule(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
+            elif self.trigger_model == "teaser":
+                self.trigger_model = TEASER(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
+            elif self.trigger_model == "ecec":
+                self.trigger_model = ECEC(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
+            elif self.trigger_model == "ecdire":
+                self.trigger_model = ECDIRE(self.chronological_classifiers, **self.trigger_params)
+            elif self.trigger_model == "edsc":
+                self.trigger_model = EDSC(min_length=5, max_length=self.chronological_classifiers.max_length, **self.trigger_params)
+            elif self.trigger_model == "ects":
+                self.trigger_model = ECTS(self.models_input_lengths, **self.trigger_params)
+            elif self.trigger_model == "calimera":
+                self.trigger_model = CALIMERA(self.cost_matrices, self.models_input_lengths, **self.trigger_params)    
+            else:
+                raise ValueError("Unknown trigger model")
         else:
-            #self.cost_matrices = create_cost_matrices(self.models_input_lengths,
-            #                                     self.misclassification_cost, self.delay_cost, cost_function="sum")
-            self.cost_matrices = CostMatrices(timestamps=self.models_input_lengths,
-                                              n_classes=len(np.unique(y)), alpha=1/2)
-            self.trigger_model = EconomyGamma(self.cost_matrices, self.models_input_lengths,
-                                              nb_intervals=5)
-            #self.trigger_model = StoppingRule(self.cost_matrices, self.models_input_lengths, 
-            #                                  stopping_rule="SR1", objective="hmean", n_jobs=2)
-            #self.trigger_model = TEASER(self.cost_matrices, self.models_input_lengths, 
-            #                            objective='hmean', n_jobs=1)
-            #self.trigger_model = ECEC(self.cost_matrices, self.models_input_lengths, 
-            #                          objective="hmean", n_jobs=2)
-            #self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.models_input_lengths, 
-            #                                          objective="avg_cost", n_jobs=1)
-            #self.trigger_model = ECDIRE(self.chronological_classifiers, n_jobs=2)
-            #self.trigger_model = EDSC(min_length=5, max_length=12, n_jobs=3)
-            #self.trigger_model = ECTS(self.models_input_lengths, support=0, relaxed=False, n_jobs=1)
-            #self.trigger_model = CALIMERA(self.cost_matrices, self.models_input_lengths)
+            self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
+            warn("No trigger model given, using base probability"
+                 "threshold grid-search by default")
 
         self._fit_trigger_model(X_trigger, y_trigger)
-        # self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
+
+        if self.trigger_model.alter_classifiers:
+            self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
+
         return self
 
     def predict(self, X):
@@ -686,11 +657,17 @@ class EarlyClassifier:
         X, _ = check_X_y(X, None, equal_length=False)
 
         # Predict
-        classes = self.chronological_classifiers.predict(X)
-        probas = self.chronological_classifiers.predict_proba(X, past_probas=False)
-        triggers, costs = self.trigger_model.predict(X, probas)
-        #classes, triggers = self.trigger_model.predict(X)
-        #costs = None
+        if self.trigger_model.require_classifiers:
+            classes = self.chronological_classifiers.predict(X)
+
+            past_probas = False
+            if self.trigger_model.require_past_probas:
+                past_probas = True
+            probas = self.chronological_classifiers.predict_proba(X, past_probas=past_probas)
+            triggers, costs = self.trigger_model.predict(X, probas)
+        else:
+            classes, triggers = self.trigger_model.predict(X)
+            probas, costs = None, None
 
         return classes, probas, triggers, costs
 
@@ -748,6 +725,10 @@ class EarlyClassifier:
         return (avg_score, acc, earl) 
     
     def get_post(self, X, y, use_probas=False):
+
+        if use_probas and not self.trigger_model.require_classifiers:
+            raise ValueError("Unable to estimate probabilities for trigger models"
+                             "that doesn't rely on probabilistic classifiers")
 
         all_f = np.zeros((len(self.models_input_lengths), len(y)))
 

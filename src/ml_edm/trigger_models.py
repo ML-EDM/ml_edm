@@ -2,6 +2,7 @@ import copy
 import numpy as np
 import pandas as pd
 
+from abc import ABC, abstractmethod
 from warnings import warn
 from itertools import permutations
 from collections.abc import Iterable
@@ -19,7 +20,29 @@ def gini(probas):
 
 KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
-class ProbabilityThreshold:
+class TriggerModel(ABC):
+
+    def __init__(self):
+        self.require_past_probas = False
+        self.require_classifiers = True
+        self.alter_classifiers = False
+
+    @abstractmethod
+    def fit(self, X, y):
+        """Fit the trigger model according to probas 
+        outputed by classifiers (or not)
+
+        """
+    
+    @abstractmethod
+    def predict(self, X):
+        """Predict whether or not time to make
+        decision is safe or not 
+
+        """
+
+
+class ProbabilityThreshold(TriggerModel):
 
     def __init__(self,
                 cost_matrices,
@@ -89,7 +112,7 @@ class ProbabilityThreshold:
         return np.array(triggers), None
 
         
-class EconomyGamma:
+class EconomyGamma(TriggerModel):
     """
     A highly performing non-myopic trigger model based on the economy architecture for early time series classification.
     Allows the anticipation of future decision costs based on a supervised grouping of time series and user-defined
@@ -501,7 +524,7 @@ class EconomyGamma:
         return np.array(triggers), costs
 
 
-class StoppingRule:
+class StoppingRule(TriggerModel):
 
     """
     A myopic trigger model which triggers a decision whenever a stopping rule representing time and confidence passes a
@@ -600,7 +623,7 @@ class StoppingRule:
         return np.array(triggers), None
 
 
-class TEASER:
+class TEASER(TriggerModel):
 
     def __init__(self,
                  cost_matrices,
@@ -609,6 +632,11 @@ class TEASER:
                  n_jobs=1):
         
         super().__init__()
+
+        ######Constant attributes#######
+        self.require_past_probas = True
+        ################################
+
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
         self.objective = objective
@@ -761,7 +789,7 @@ class TEASER:
         return np.array(triggers), None
 
 
-class ECEC:
+class ECEC(TriggerModel):
 
     def __init__(self,
                  cost_matrices,
@@ -770,6 +798,11 @@ class ECEC:
                  n_jobs=1):
         
         super().__init__()
+
+        ######Constant attributes#######
+        self.require_past_probas = True
+        ################################
+
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
         self.objective = objective
@@ -881,7 +914,7 @@ class ECEC:
         return np.array(triggers), None
 
 
-class ECDIRE:
+class ECDIRE(TriggerModel):
 
     def __init__(self,
                  chronological_classifiers,
@@ -890,6 +923,10 @@ class ECDIRE:
                  n_jobs=1):
 
         super().__init__()
+
+        ######Constant attributes#######
+        self.alter_classifiers = True
+        ################################
 
         self.models_input_lengths = chronological_classifiers.models_input_lengths
         self.chronological_classifiers = chronological_classifiers
@@ -1047,7 +1084,7 @@ class ECDIRE:
         return np.array(triggers), None
 
 
-class CALIMERA:
+class CALIMERA(TriggerModel):
     """
     CALIMERA: A new early time series classification method
     Inspired by : https://github.com/JakubBilski/CALIMERA 
@@ -1059,7 +1096,6 @@ class CALIMERA:
         
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
-        #self.alpha = alpha
 
         self.n_jobs = n_jobs
     

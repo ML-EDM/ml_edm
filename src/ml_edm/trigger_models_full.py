@@ -3,7 +3,9 @@ import numpy as np
 from joblib import Parallel, delayed
 from sklearn.neighbors import NearestNeighbors
 
-class EDSC:
+from trigger_models import TriggerModel
+
+class EDSC(TriggerModel):
 
     def __init__(self,
                  min_length,
@@ -15,6 +17,10 @@ class EDSC:
                  min_coverage=1.,
                  n_jobs=1):
         
+        ######Constant attributes#######
+        self.require_classifiers = False
+        ################################
+
         self.min_length = min_length
         self.max_length = max_length
         self.threshold_learning = threshold_learning
@@ -234,7 +240,7 @@ class EDSC:
         return np.array(predictions), np.array(triggers)
     
 
-class ECTS:
+class ECTS(TriggerModel):
 
     """
     Early classification on time series(2012)
@@ -253,6 +259,11 @@ class ECTS:
         :param support: minimum support threshold
         :param relaxed: whether we use the Relaxed version or the normal
         """
+        
+        ######Constant attributes#######
+        self.require_classifiers = False
+        ################################
+
         self.rnn = dict()
         self.nn = dict()
         self.mpl = dict()
