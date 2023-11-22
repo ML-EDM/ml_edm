@@ -2,8 +2,9 @@ import copy
 import numpy as np
 import pandas as pd
 
-#from deep.deep_classifiers import DeepChronologicalClassifier
+from deep.deep_classifiers import DeepChronologicalClassifier
 from dataset import extract_features, get_time_series_lengths
+from features_extraction import Feature_extractor
 from cost_matrice import CostMatrices
 from trigger_models import *
 from trigger_models_full import *
@@ -12,6 +13,7 @@ from metrics import average_cost
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.model_selection import RepeatedStratifiedKFold, train_test_split
+from sklearn.metrics import cohen_kappa_score
 from sklearn.calibration import CalibratedClassifierCV
 
 from warnings import warn
@@ -134,7 +136,7 @@ class ChronologicalClassifiers:
                  models_input_lengths=None,
                  classifiers=None,
                  min_length=1,
-                 feature_extraction=False, # TODO: make this True once a better feature extraction is implemented.
+                 feature_extraction=None, # TODO: make this True once a better feature extraction is implemented.
                  calibration=True,
                  random_state=44):  
         
@@ -194,11 +196,11 @@ class ChronologicalClassifiers:
             if not isinstance(self.sampling_ratio, float) \
                     and not isinstance(self.sampling_ratio, int):
                 raise TypeError(
-                    "Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
+                    "Argument 'sampling_ratio' should be a strictly positive float between 0 and 1.")
             
             if self.sampling_ratio <= 0 or self.sampling_ratio > 1:
                 raise ValueError(
-                    "Argument 'learned_timestamps_ratio' should be a strictly positive float between 0 and 1.")
+                    "Argument 'sampling_ratio' should be a strictly positive float between 0 and 1.")
             
             incompatible = []
             if self.models_input_lengths is not None:
@@ -251,13 +253,13 @@ class ChronologicalClassifiers:
                 self.models_input_lengths = np.unique(self.models_input_lengths)
                 warn("Removed duplicates timestamps in argument 'models_input_lengths'.")
             equal.append(('models_input_lengths', len(self.models_input_lengths)))
-
         else:
-            self.models_input_lengths = list(set(
+            self.models_input_lengths = np.array(list(set(
                 [int((self.max_length - self.min_length) * i / self.nb_classifiers) + self.min_length
                  for i in range(1, self.nb_classifiers+1)]
-            ))
+            )))
             self.nb_classifiers = len(self.models_input_lengths)
+        self.models_input_lengths = np.sort(self.models_input_lengths)
 
         if len(equal) >= 2:
             for i in range(len(equal) - 1):
@@ -265,18 +267,24 @@ class ChronologicalClassifiers:
                     raise ValueError(f"Contradictory values given to arguments {[e[0] for e in equal]}.")
 
         # feature_extraction check
-        if not isinstance(self.feature_extraction, bool):
-            raise TypeError("Argument 'feature_extraction' should be a bool.")
+        """
+        if not isinstance(self.feature_extraction, str):
+            raise TypeError("Argument 'feature_extraction' should be a string.")
+        """
 
         # Check X and y
         X, y = check_X_y(X, y)
 
         # FEATURE EXTRACTION AND FITTING
+        self.extractors = []
         for i, ts_length in enumerate(self.models_input_lengths):
             Xt = X[:, :ts_length]
             if self.feature_extraction:
-                Xt = extract_features(Xt)
-            Xt_clf, X_calib, y_clf, y_calib = train_test_split(Xt, y, test_size=0.3, 
+                scale = True if self.feature_extraction == 'minirocket' else False
+                self.extractors.append(Feature_extractor(self.feature_extraction, scale, kwargs={"n_jobs":1}).fit(Xt))
+                Xt = self.extractors[-1].transform(Xt)
+
+            Xt_clf, X_calib, y_clf, y_calib = train_test_split(Xt, y, test_size=0.3, stratify=y,
                                                                random_state=self.random_state)         
             self.classifiers[i].fit(Xt_clf, y_clf, *args, **kwargs)
             
@@ -310,39 +318,53 @@ class ChronologicalClassifiers:
         # Validate X format
         X, _ = check_X_y(X, None, equal_length=False)
 
-        # Get time series lengths
-        time_series_lengths = get_time_series_lengths(X)
-
-        # Truncate time series to classifier compatible length
+        # Group X by batch of same length
         truncated = False
-        for i in range(len(X)):
-            if time_series_lengths[i] not in self.models_input_lengths:
-                for length in self.models_input_lengths[::-1]:
-                    if length < time_series_lengths[i]:
-                        X[i][length:] = np.nan
-                        time_series_lengths[i] = length
-                        truncated = True
-                        break
+        grouped_X = {}
+        for serie in X:
+            length = len(serie)
+            if length not in self.models_input_lengths and \
+                length > self.models_input_lengths[0]:
+                # truncate to nearest valid timestamp
+                filtered = filter(lambda x: x <= length, self.models_input_lengths)
+                length = min(filtered, key=lambda x: length-x, default=None)
+                if length:
+                    serie = serie[:length]
+                    truncated = True
 
+            if length in grouped_X.keys():
+                grouped_X[length].append(serie)
+            else:
+                grouped_X[length] = [serie]
+        
+        """
         # Feature extraction is done on the whole predictions dataset to gain time.
         if self.feature_extraction is True:
             X = extract_features(X)
             inputs_lengths = get_time_series_lengths(X)
         else:
             inputs_lengths = time_series_lengths
+        """
 
         # Return prior if no classifier fitted for time series this short, predict with classifier otherwise
         predictions = []
         returned_priors = False
-        for i, x in enumerate(X):
-            if time_series_lengths[i] < self.models_input_lengths[0]:
-                predictions.append(self.classes_[np.argmax(self.class_prior)])
+        for length, series in grouped_X.items():
+            if length < self.models_input_lengths[0]:
+                preds_prior = [self.classes_[np.argmax(self.class_prior)]
+                               for _ in range(len(series))]
+                predictions.append(np.array(preds_prior))
                 returned_priors = True
             else:
-                clf_idx = np.where(self.models_input_lengths == time_series_lengths[i])
+                clf_idx = np.where(
+                    self.models_input_lengths == length
+                )[0][0]
+                series = np.array(series)
+                if self.feature_extraction:
+                    series = self.extractors[clf_idx].transform(series)
                 predictions.append(
-                    self.classifiers[clf_idx[0][0]].predict(x[None, :inputs_lengths[i]])[0]
-                )
+                    self.classifiers[clf_idx].predict(series)
+                )  
 
         # Send warnings if necessary
         if truncated:
@@ -350,9 +372,9 @@ class ChronologicalClassifiers:
         if returned_priors:
             warn("Some time series are of insufficient length for prediction; returning prior probabilities instead.")
 
-        return np.array(predictions)
+        return np.vstack(predictions).squeeze()
 
-    def predict_proba(self, X, past_probas=False):
+    def predict_proba(self, X):
         """
         Predict a dataset of time series of various lengths using the right classifier in the ChronologicalClassifiers
         object. If a time series has a different number of measurements than the values in 'models_input_lengths', the
@@ -369,56 +391,115 @@ class ChronologicalClassifiers:
         # Validate X format with varying series lengths
         X, _ = check_X_y(X, None, equal_length=False)
 
-        # Get time series lengths
-        time_series_lengths = get_time_series_lengths(X)
-
-        # Truncate time series to classifier compatible length
+        # Group X by batch of same length
         truncated = False
-        for i in range(len(X)):
-            if time_series_lengths[i] not in self.models_input_lengths:
-                for length in self.models_input_lengths[::-1]:
-                    if length < time_series_lengths[i]:
-                        X[i][length:] = np.nan
-                        time_series_lengths[i] = length
-                        truncated = True
-                        break
+        grouped_X = {}
+        for serie in X:
+            length = len(serie)
+            if length not in self.models_input_lengths and \
+                length > self.models_input_lengths[0]:
+                # truncate to nearest valid timestamp
+                filtered = filter(lambda x: x <= length, self.models_input_lengths)
+                length = min(filtered, key=lambda x: length-x, default=None)
+                if length:
+                    serie = serie[:length]
+                    truncated = True
 
-        # Feature extraction is done on the whole predictions dataset to save time.
-        if self.feature_extraction is True:
-            X = extract_features(X)
-            inputs_lengths = get_time_series_lengths(X)
-        else:
-            inputs_lengths = time_series_lengths
+            if length in grouped_X.keys():
+                grouped_X[length].append(serie)
+            else:
+                grouped_X[length] = [serie]
 
         # Return prior if no classifier fitted for time series this short, 
         # predict with classifier otherwise
         predictions = []
         returned_priors = False
-        for i, x in enumerate(X):
-            if time_series_lengths[i] < self.models_input_lengths[0]:
-                predictions.append(self.class_prior)
+        for length, series in grouped_X.items():
+            if length < self.models_input_lengths[0]:
+                predictions.append(np.ones((len(series), len(self.class_prior))) * self.class_prior)
                 returned_priors = True
             else:
                 clf_idx = np.where(
-                    self.models_input_lengths == time_series_lengths[i]
-                )
-                if not past_probas:
-                    predictions.append(
-                        self.classifiers[clf_idx[0][0]].predict_proba(x[None, :inputs_lengths[i]])[0]
-                    )
-                else:
-                    if time_series_lengths[i] != self.models_input_lengths[0]:
-                        all_probas = [
-                            self.classifiers[j].predict_proba(x[None, :self.models_input_lengths[j]])[0]
-                            for j in range(clf_idx[0][0]+1)
+                    self.models_input_lengths == length
+                )[0][0]
+                series = np.array(series)
+                if self.feature_extraction:
+                    series = self.extractors[clf_idx].transform(series)
+                predictions.append(
+                    self.classifiers[clf_idx].predict_proba(series)
+                )  
+        # Send warnings if necessary
+        if truncated:
+            warn("Some time series were truncated during prediction since no classifier was fitted for their lengths.")
+        if returned_priors:
+            warn("Some time series are of insufficient length for prediction; returning prior probabilities instead.")
+
+        return np.vstack(predictions)
+    
+    def predict_past_proba(self, X):
+        # Validate X format with varying series lengths
+        X, _ = check_X_y(X, None, equal_length=False)
+
+        # Group X by batch of same length
+        truncated = False
+        grouped_X = {}
+        for serie in X:
+            length = len(serie)
+            if length not in self.models_input_lengths and \
+                length > self.models_input_lengths[0]:
+                # truncate to nearest valid timestamp
+                filtered = filter(lambda x: x <= length, self.models_input_lengths)
+                length = min(filtered, key=lambda x: length-x, default=None)
+                if length:
+                    serie = serie[:length]
+                    truncated = True
+
+            if length in grouped_X.keys():
+                grouped_X[length].append(serie)
+            else:
+                grouped_X[length] = [serie]
+
+        # Return prior if no classifier fitted for time series this short, 
+        # predict with classifier otherwise
+        predictions = []
+        returned_priors = False
+        for length, series in grouped_X.items():
+            if length < self.models_input_lengths[0]:
+                priors = np.ones((len(series), len(self.class_prior))) * self.class_prior
+                predictions.append(priors)
+                returned_priors = True
+            else:
+                clf_idx = np.where(
+                    self.models_input_lengths == length
+                )[0][0]
+                if length != self.models_input_lengths[0]:
+                    series = np.array(series) # allow for slicing
+
+                    if self.feature_extraction:
+                        partial_series = [
+                            self.extractors[j].transform(
+                            series[:, :self.models_input_lengths[j]])
+                            for j in range(clf_idx+1)
                         ]
                     else:
-                        all_probas = self.classifiers[0].predict_proba(x[None, :inputs_lengths[i]])[0]
-                      
-                    predictions.append(all_probas)   
+                        partial_series = [series[:, :self.models_input_lengths[j]] 
+                                          for j in range(clf_idx+1)]
 
-        if not past_probas:
-            predictions = np.array(predictions)
+                    all_probas = [
+                        self.classifiers[j].predict_proba(x) for j, x in enumerate(partial_series)
+                    ]
+                    all_probas = list(
+                        np.array(all_probas).transpose((1,0,2))
+                    )
+                else:
+                    if self.feature_extraction:
+                        series = self.extractors[0].transform(series)
+
+                    all_probas = self.classifiers[0].predict_proba(np.array(series))
+                    all_probas = list(np.expand_dims(all_probas, 1))
+
+                predictions.extend(all_probas)
+
         # Send warnings if necessary
         if truncated:
             warn("Some time series were truncated during prediction since no classifier was fitted for their lengths.")
@@ -475,7 +556,7 @@ class EarlyClassifier:
                  random_state=44):
         
         self.cost_matrices = cost_matrices
-        self.chronological_classifiers = chronological_classifiers
+        self.chronological_classifiers = copy.deepcopy(chronological_classifiers)
         self.prefit = prefit_classifiers
 
         self.trigger_model = trigger_model
@@ -547,10 +628,15 @@ class EarlyClassifier:
         return self
 
     def _fit_trigger_model(self, X, y):
-        X_pred = np.stack([self.chronological_classifiers.predict_proba(X[:, :length])
-                           for length in self.chronological_classifiers.models_input_lengths], axis=1)
-        self.trigger_model.fit(X, X_pred, y)
-        #self.trigger_model.fit(X, y)
+        #X_pred = np.stack([self.chronological_classifiers.predict_proba(X[:, :length])
+        #                   for length in self.chronological_classifiers.models_input_lengths], axis=1)
+        
+        X_probas = np.stack(self.chronological_classifiers.predict_past_proba(X))
+        
+        if self.trigger_model.require_classifiers:
+            self.trigger_model.fit(X, X_probas, y)
+        else:
+            self.trigger_model.fit(X, y)
 
     def fit(self, X, y, trigger_proportion=0.3):
         """
@@ -576,7 +662,8 @@ class EarlyClassifier:
         
         # FIT CLASSIFIERS
         if self.chronological_classifiers is not None:
-            if not isinstance(self.chronological_classifiers, ChronologicalClassifiers):
+            if not isinstance(self.chronological_classifiers, ChronologicalClassifiers) and \
+                not isinstance(self.chronological_classifiers, DeepChronologicalClassifier):
                 raise ValueError(
                     "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
         else:
@@ -610,11 +697,13 @@ class EarlyClassifier:
             elif self.trigger_model == "ecdire":
                 self.trigger_model = ECDIRE(self.chronological_classifiers, **self.trigger_params)
             elif self.trigger_model == "edsc":
-                self.trigger_model = EDSC(min_length=5, max_length=self.chronological_classifiers.max_length, **self.trigger_params)
+                self.trigger_model = EDSC(min_length=5, max_length=self.chronological_classifiers.max_length//2, **self.trigger_params)
             elif self.trigger_model == "ects":
                 self.trigger_model = ECTS(self.models_input_lengths, **self.trigger_params)
             elif self.trigger_model == "calimera":
-                self.trigger_model = CALIMERA(self.cost_matrices, self.models_input_lengths, **self.trigger_params)    
+                self.trigger_model = CALIMERA(self.cost_matrices, self.models_input_lengths, **self.trigger_params) 
+            elif self.trigger_model == "elects":
+                self.trigger_model = self.chronological_classifiers # embed trigger model  
             else:
                 raise ValueError("Unknown trigger model")
         else:
@@ -625,7 +714,7 @@ class EarlyClassifier:
         self._fit_trigger_model(X_trigger, y_trigger)
 
         if self.trigger_model.alter_classifiers:
-            self.chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
+            self.new_chronological_classifiers = self.trigger_model.chronological_classifiers # if ECDIRE
         # self.non_myopic = True if issubclass(type(self.trigger_model), NonMyopicTriggerModel) else False
 
         return self
@@ -656,17 +745,24 @@ class EarlyClassifier:
         # Validate X format
         X, _ = check_X_y(X, None, equal_length=False)
 
+        chrono_clf = self.chronological_classifiers
+        if self.trigger_model.alter_classifiers:
+            chrono_clf = self.new_chronological_classifiers
+
         # Predict
         if self.trigger_model.require_classifiers:
-            classes = self.chronological_classifiers.predict(X)
+            #classes = self.chronological_classifiers.predict(X)  
+            probas = chrono_clf.predict_proba(X)
+            classes = probas.argmax(axis=-1)
 
-            past_probas = False
             if self.trigger_model.require_past_probas:
-                past_probas = True
-            probas = self.chronological_classifiers.predict_proba(X, past_probas=past_probas)
-            triggers, costs = self.trigger_model.predict(X, probas)
+                past_probas = chrono_clf.predict_past_proba(X)
+                triggers, costs = self.trigger_model.predict(X, past_probas)
+            else:
+                triggers, costs = self.trigger_model.predict(X, probas)
+
         else:
-            classes, triggers = self.trigger_model.predict(X)
+            classes, triggers, _ = self.trigger_model.predict(X)
             probas, costs = None, None
 
         return classes, probas, triggers, costs
@@ -677,12 +773,29 @@ class EarlyClassifier:
         trigger_mask = np.zeros((X.shape[0], )).astype(bool)
 
         all_preds = np.zeros((X.shape[0], )) - 1
-        all_t_star = copy.deepcopy(all_preds)
-        all_f_star = copy.deepcopy(all_preds)
+        all_t_star = np.zeros((X.shape[0], )) - 1
+        all_f_star = np.zeros((X.shape[0], )) - 1
+
+        if self.trigger_model.require_past_probas:
+            all_probas = np.array(
+                self.chronological_classifiers.predict_past_proba(X)
+            )
 
         for t, l in enumerate(self.models_input_lengths):
 
-            classes, _, triggers, _ = self.predict(X[:, :l])
+            if isinstance(self.trigger_model, ECTS):
+                classes, triggers, all_t_star = self.trigger_model.predict(X)
+                def_preds = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
+                all_preds = np.nan_to_num(classes, nan=def_preds)
+                all_f_star = np.array([self.cost_matrices[np.where(self.models_input_lengths==t)[0][0]][int(all_preds[i])][y[i]] 
+                                       for i, t in enumerate(all_t_star)])
+                break
+            elif self.trigger_model.require_past_probas: # not call the predict to avoid recomputing all past probas T times
+                probas_tmp = all_probas[:, :t+1, :]
+                classes = probas_tmp.argmax(axis=-1)[:, -1]
+                triggers = self.trigger_model.predict(X[:, :l], probas_tmp)[0]
+            else:
+                classes, _, triggers, _ = self.predict(X[:, :l])
             
             trigger_mask = triggers
             # already made predictions
@@ -691,7 +804,7 @@ class EarlyClassifier:
 
             all_preds[trigger_mask] = classes[trigger_mask]
             all_t_star[trigger_mask] = l
-            all_f_star[trigger_mask] = np.array([self.cost_matrices[t][p][y[trigger_mask][i]]
+            all_f_star[trigger_mask] = np.array([self.cost_matrices[t][int(p)][y[trigger_mask][i]]
                                                  for i, p in enumerate(classes[trigger_mask])])
 
             # update past triggers with current triggers
@@ -703,49 +816,86 @@ class EarlyClassifier:
 
             if l == self.chronological_classifiers.models_input_lengths[-1]:
                 all_t_star[np.where(all_t_star < 0)] = l
+                # final prediction is the valid prediction
                 all_preds[np.where(all_preds < 0)] = classes[np.where(all_preds < 0)]
-                all_f_star[np.where(all_preds < 0)] = np.array([self.cost_matrices[-1][p][y[i]]
-                                                                for i, p in classes[np.where(all_preds < 0)]])
-        
+                # if no prediction so far, output majority class 
+                if np.isnan(all_preds).any():
+                    all_preds[np.where(np.isnan(all_preds))] = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
+
+                all_f_star[np.where(all_f_star < 0)] = np.array([self.cost_matrices[-1][int(p)][y[i]]
+                                                                for i, p in enumerate(all_preds[np.where(all_f_star < 0)])])
+                break
+                
         acc = (all_preds==y).mean()
         earl = np.mean(all_t_star) / X.shape[1]
         avg_score = np.mean(all_f_star)
         #avg_score = average_cost(acc, earl, self.cost_matrices.alpha)
 
         if return_metrics:
+            kappa = cohen_kappa_score(all_preds, y)
             return {
                 "accuracy": acc,
                 "earliness": earl,
                 "average_cost": avg_score,
                 "harmonic_mean": hmean((acc, 1-earl)),
+                "kappa": kappa, 
+                "pred_t_star": all_preds, 
                 "t_star": all_t_star,
                 "f_star": all_f_star
             }
 
         return (avg_score, acc, earl) 
     
-    def get_post(self, X, y, use_probas=False):
+    def get_post(self, X, y, use_probas=False, return_metrics=False):
 
         if use_probas and not self.trigger_model.require_classifiers:
             raise ValueError("Unable to estimate probabilities for trigger models"
                              "that doesn't rely on probabilistic classifiers")
 
         all_f = np.zeros((len(self.models_input_lengths), len(y)))
+        all_preds = np.zeros((len(self.models_input_lengths), len(y)))
 
         for t, l in enumerate(self.models_input_lengths):
-            classes, probas, _, _ = self.predict(X[:, :l])
+            probas = self.chronological_classifiers.predict_proba(X[:, :l])
+            classes = np.argmax(probas, axis=-1)
+            all_preds[t] = classes
             if use_probas:
                 all_f[t] = np.array(
                     [self.cost_matrices[t][:][y[i]] * probas[i] for i in range(len(y))]
-                ).sum(axis=1)
+                ).sum(axis=-1)
             else:
-                all_f[t] = [self.cost_matrices[t][int(p)][y[i]]
-                            for i, p in enumerate(classes)]
+                if l == self.models_input_lengths[-1]:
+                    default_pred = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
+                    all_f[t] = [self.cost_matrices[t][int(p)][y[i]] 
+                                if not np.isnan(p) else self.cost_matrices[t][default_pred][y[i]] 
+                                for i, p in enumerate(classes)]
+                else:
+                    all_f[t] = [self.cost_matrices[t][int(p)][y[i]] 
+                                if not np.isnan(p) else np.inf
+                                for i, p in enumerate(classes)]
         
         t_post_idx = all_f.argmin(axis=0)
         all_t_post = [self.models_input_lengths[idx]
                       for idx in t_post_idx]
         
         all_f_post = [f[t_post_idx[i]] for i, f in enumerate(all_f.T)]
+        # if nan, select majority class 
+        all_preds_t_post = [int(p[t_post_idx[i]]) if not np.isnan(all_preds[:,i]).all()
+                            else np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
+                            for i, p in enumerate(all_preds.T)]
 
-        return all_t_post, all_f_post
+        if return_metrics:
+            acc = (all_preds_t_post==y).mean()
+            earl = np.mean(all_t_post) / X.shape[1]
+            return {
+                "accuracy_post": acc,
+                "earliness_post": earl,
+                "average_cost_post": np.mean(all_f_post),
+                "harmonic_mean_post": hmean((acc, 1-earl)),
+                "kappa_post": cohen_kappa_score(all_preds_t_post, y),
+                "pred_t_post": all_preds_t_post,
+                "t_post": all_t_post,
+                "f_post": all_f_post
+            }
+
+        return all_t_post, all_f_post, all_preds_t_post

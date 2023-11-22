@@ -1,4 +1,5 @@
 import copy
+import random
 import numpy as np
 import pandas as pd
 
@@ -8,12 +9,16 @@ from itertools import permutations
 from collections.abc import Iterable
 from joblib import Parallel, delayed
 from scipy.stats import hmean
+
 from sklearn.svm import OneClassSVM
 from sklearn.kernel_ridge import KernelRidge
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
 
 from utils import check_X_probas
+
+np.seterr(divide='ignore', invalid='ignore')
 
 def gini(probas):
     return 1 - np.sum(np.square(probas))
@@ -51,6 +56,7 @@ class ProbabilityThreshold(TriggerModel):
                 manual_threshold=None,
                 n_jobs=1):
         
+        super().__init__()
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
         self.objective = objective
@@ -184,13 +190,17 @@ class EconomyGamma(TriggerModel):
     def __init__(self,
                  cost_matrices,
                  models_input_lengths,
-                 nb_intervals=5,
-                 aggregation_function='max'):
-
+                 nb_intervals=None,
+                 aggregation_function='max',
+                 n_jobs=1):
+        
+        super().__init__()
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
         self.nb_intervals = nb_intervals
         self.aggregation_function = aggregation_function
+        self.n_jobs = n_jobs
+
         self.thresholds = None
         self.transition_matrices = None
         self.confusion_matrices = None
@@ -249,6 +259,7 @@ class EconomyGamma(TriggerModel):
     
     def _get_costs(self, groups, timestamp, nb_intervals):
 
+        timestamp_idx = np.nonzero(self.models_input_lengths == timestamp)[0][0]
         for group in groups:
             costs = []
             # If series length is not covered return initial cost? Else estimate cost
@@ -259,15 +270,15 @@ class EconomyGamma(TriggerModel):
             else:
                 gamma = np.zeros(nb_intervals)  # interval membership probability vector
                 gamma[group] = 1
-        
-            for t in range(np.nonzero(self.models_input_lengths == timestamp)[0][0], len(self.models_input_lengths)):
+
+            for t in range(timestamp_idx, len(self.models_input_lengths)):
                 
                 cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t])
                 costs.append(cost)
                 if t != len(self.models_input_lengths) - 1:
                     gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
 
-            timestamp += 1
+            timestamp_idx += 1
             if np.argmin(costs) == 0:
                 break
 
@@ -319,10 +330,6 @@ class EconomyGamma(TriggerModel):
         if self.models_input_lengths.shape[0] != len(self.cost_matrices):
             raise ValueError("Argument 'cost_matrices' should have as many matrices as there are values in argument "
                              "'models_input_lengths'.")
-
-        # nb_intervals
-        #if self.nb_intervals < 1:
-        #    raise ValueError("Argument nb_intervals should be a strictly positive int.")
         
         if not callable(self.aggregation_function):
             if not isinstance(self.aggregation_function, str):
@@ -409,6 +416,16 @@ class EconomyGamma(TriggerModel):
         else:
             k_candidates = np.arange(1, 21)
         
+        """
+        idx_sorted, idx_meta = train_test_split(
+            list(range(len(X_sorted.T))), test_size=0.7, random_state=44
+        )
+        X_aggregated, X_aggregated_meta = X_aggregated[idx_sorted, :], X_aggregated[idx_meta, :]
+        X_sorted, X_meta = X_sorted[:, idx_sorted], X_sorted[:, idx_meta]
+        X_probas, X_proba_meta = X_probas[idx_sorted, :, :], X_probas[idx_meta, :, :]
+        y, y_meta = y[idx_sorted], y[idx_meta]
+        """
+        
         opt_costs = np.inf
         for k in  k_candidates:
             thresholds_indices = np.linspace(0, X_sorted.shape[1], k+1)[1:-1].astype(int)
@@ -417,14 +434,14 @@ class EconomyGamma(TriggerModel):
             # Get intervals given threshold : shape (T, N), values = group ID of each pred
             X_intervals = np.array(
                 [[np.sum([threshold <= x for threshold in self.thresholds[i]]) 
-                for x in timestamp_data] for i, timestamp_data in enumerate(X_aggregated.T)]
-            )
+                for x in timestamp_data] for i, timestamp_data in enumerate(X_aggregated.T)],
+            dtype=int)
 
             self.transition_matrices = self._get_transitions_matrices(X_intervals, k)
             self.confusion_matrices = self._get_confusion_matrices(X_probas, X_intervals, y, k)
             
             mean_costs = np.mean(
-                [self._get_costs(group-1, self.models_input_lengths[0], k)[0]
+                [self._get_costs(group, self.models_input_lengths[0], k)[0]
                  for group in X_intervals.T])
             
             if mean_costs < opt_costs:
@@ -432,6 +449,8 @@ class EconomyGamma(TriggerModel):
                 self.nb_intervals = k
         
         if k != self.nb_intervals:
+            #X_sorted, X_probas, X_aggregated, y = X_meta, X_proba_meta, X_aggregated_meta, y_meta
+
             thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_intervals+1)[1:-1].astype(int)
             self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)
             X_intervals = np.array(
@@ -500,7 +519,7 @@ class EconomyGamma(TriggerModel):
             else:
                 interval = np.sum(
                     [threshold <= x for threshold in self.thresholds[
-                    np.nonzero(self.models_input_lengths == timestamps[i])[0][0]]]
+                    np.nonzero(self.models_input_lengths == timestamps[i])[0][0]]], dtype=int
                 )
                 X_intervals.append(interval)
 
@@ -593,7 +612,7 @@ class StoppingRule(TriggerModel):
         self.max_length = X.shape[1]
 
         nb_gammas = 3 if self.stopping_rule == "SR1" else X_probas.shape[2]+1
-        self.candidates_gammas = list(permutations(np.linspace(-1, 1, 11), nb_gammas))
+        self.candidates_gammas = list(permutations(np.linspace(-1, 1, 41), nb_gammas))
 
         gamma_costs = Parallel(n_jobs=self.n_jobs) \
                     (delayed(self._get_score)(gammas, X_probas, y) for gammas in self.candidates_gammas)
@@ -665,20 +684,27 @@ class TEASER(TriggerModel):
         gamma_grid = (
             {"gamma": [100, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1.5, 1]}
         )
-        gs = GridSearchCV(
-            estimator=oc_clf,
-            param_grid=gamma_grid,
-            scoring='accuracy',
-            cv=min(len(oc_features), 5),
-            n_jobs=self.n_jobs
-        )
-        # train the set of master classifiers only
-        # on positives samples 
-        gs.fit(oc_features[masks_pos_probas], 
+        if len(oc_features[masks_pos_probas]) > 2:
+            gs = GridSearchCV(
+                estimator=oc_clf,
+                param_grid=gamma_grid,
+                scoring='accuracy',
+                cv=min(len(oc_features[masks_pos_probas]), 5),
+                n_jobs=1
+            )
+            # train the set of master classifiers only
+            # on positives samples 
+            gs.fit(oc_features[masks_pos_probas], 
                np.ones(len(oc_features[masks_pos_probas]))
-        )
+            )
+            clf = gs.best_estimator_
+        else:
+            oc_clf.set_params(**{"gamma": random.sample(gamma_grid['gamma'], 1)[0]})
+            clf = oc_clf.fit(oc_features[masks_pos_probas])
+            warn("Not enough positives samples to learn from, "
+                 "selecting gamma value randomly")
 
-        return gs.best_estimator_, oc_features
+        return clf, oc_features
     
     def fit(self, X, X_probas, y, classes_=None):
         
@@ -818,7 +844,10 @@ class ECEC(TriggerModel):
                 nominator = len(preds[(preds == y2) & (y == y1)])
                 denominator = len(preds[(preds == y2)])
 
-                ratios.append(nominator / denominator)              
+                if denominator != 0:
+                    ratios.append(nominator / denominator)              
+                else:
+                    ratios.append(0)
 
         return ratios
 
@@ -928,8 +957,8 @@ class ECDIRE(TriggerModel):
         self.alter_classifiers = True
         ################################
 
-        self.models_input_lengths = chronological_classifiers.models_input_lengths
-        self.chronological_classifiers = chronological_classifiers
+        self.models_input_lengths = copy.deepcopy(chronological_classifiers.models_input_lengths)
+        self.chronological_classifiers = copy.deepcopy(chronological_classifiers)
 
         self.threshold_acc = threshold_acc
         self.cross_validation = cross_validation
@@ -978,10 +1007,19 @@ class ECDIRE(TriggerModel):
         timeline = []
         for c, acc_class in enumerate(mean_acc.T):
             acc_threshold = acc_class[-1] * self.threshold_acc
-            timestamp_idx = np.where((acc_class < acc_threshold))[0][-1] + 1
-            timeline.append(
-                (self.models_input_lengths[timestamp_idx], {c})
-            )
+            condition = np.where((acc_class < acc_threshold))[0]
+            # if all timestamps are, at least, as great as the threshold
+            if len(condition) == 0: 
+                timestamp_idx = 0
+            else: # if at least one timestamp is lower than thrseshold
+                timestamp_idx = condition[-1] + 1 
+            timestamp = self.models_input_lengths[timestamp_idx]
+            safe_timestamps = [t[0] for t in timeline] if len(timeline) > 0 else []
+
+            if timestamp in safe_timestamps:
+                timeline[safe_timestamps.index(timestamp)][1].add(c)
+            else:
+                timeline.append((timestamp, {c}))
 
         return sorted(timeline)
     
@@ -994,10 +1032,13 @@ class ECDIRE(TriggerModel):
             class_thresholds = []
             for c in range(probas_t.shape[-1] - 1):
                 probas_c = probas_t[(probas_t[:,-1] == c)][:, :-1]
-
-                probas_diff = np.array([np.max(x)-x for x in probas_c])
-                probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
-                probas_diff = np.min(probas_diff, axis=-1)
+                
+                if len(probas_c) == 0:
+                    probas_diff = np.array([0])
+                else:
+                    probas_diff = np.array([np.max(x)-x for x in probas_c])
+                    probas_diff = np.where(probas_diff==0, np.inf, probas_diff)
+                    probas_diff = np.min(probas_diff, axis=-1)
 
                 class_thresholds.append((np.min(probas_diff)))
             
@@ -1043,6 +1084,12 @@ class ECDIRE(TriggerModel):
             for j in clf_idx
         ]
         self.chronological_classifiers.classifiers = new_classifiers
+
+        if len(self.chronological_classifiers.extractors) > 0:
+            self.chronological_classifiers.extractors = [
+                self.chronological_classifiers.extractors[j]
+                for j in clf_idx
+            ]
 
         return self
     
@@ -1094,6 +1141,7 @@ class CALIMERA(TriggerModel):
                  models_input_lengths,
                  n_jobs=1):
         
+        super().__init__()
         self.cost_matrices = cost_matrices
         self.models_input_lengths = models_input_lengths
 
@@ -1165,6 +1213,12 @@ class CALIMERA(TriggerModel):
         triggers, costs = [], []
         for i, probas in enumerate(X_probas):
             trigger = False
+            # if last timestamp is reached
+            if timestamps[i] == self.models_input_lengths[-1]:
+                triggers.append(True)
+                costs.append(np.nan)
+                continue
+
             time_idx = np.where(timestamps[i] == self.models_input_lengths)[0][0]
             X_trigger, _ = self._generate_features(probas[None,:], time_idx, 
                                                    np.zeros(X.shape[0], dtype=int))

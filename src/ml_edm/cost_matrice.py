@@ -35,7 +35,7 @@ class CostMatrices:
             else:
                 raise ValueError("Missclassification cost should be defined"
                                 "as an numpy array or as a number")
-            self.missclf_cost = [missclf_matrix for _ in range(len(timestamps))]
+            self.missclf_cost = [alpha * missclf_matrix for _ in range(len(timestamps))]
 
 
             if isinstance(delay_cost, np.ndarray) or isinstance(delay_cost, list):
@@ -51,7 +51,7 @@ class CostMatrices:
             else:
                 raise ValueError("Delay cost should be defined as a callable function of time or as a"
                                 "list/array of numbers whose length is the number of timestamps")
-            self.delay_cost = [alpha * costs for costs in self.delay_cost]
+            self.delay_cost = [(1 - alpha) * costs for costs in self.delay_cost]
             self.values = np.array([self.missclf_cost[i] + self.delay_cost[i]
                                     for i in range(len(timestamps))])
     

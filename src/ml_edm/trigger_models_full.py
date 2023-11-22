@@ -10,13 +10,15 @@ class EDSC(TriggerModel):
     def __init__(self,
                  min_length,
                  max_length,
-                 threshold_learning='kde',
+                 threshold_learning='che',
                  prob_trheshold=.95,
                  bound_threshold=3,
                  alpha=3,
                  min_coverage=1.,
                  n_jobs=1):
         
+        super().__init__()
+
         ######Constant attributes#######
         self.require_classifiers = False
         ################################
@@ -163,6 +165,9 @@ class EDSC(TriggerModel):
         for i in range(len(X)):
             for j, bmd_list in enumerate(bmd[length][i]):
 
+                if not isinstance(bmd_list, np.ndarray):
+                    print("mdr")
+
                 if self.threshold_learning == 'kde':
                     p = self._kde_threshold(bmd_list, y)
                 elif self.threshold_learning == 'che':
@@ -228,7 +233,7 @@ class EDSC(TriggerModel):
                          for i in range(len(ts)-len(sub)+1)]
                 
                 trigger = (np.array(dists) <= fts[1])
-                if True in trigger:
+                if trigger.any():
                     triggers.append(True)
                     predictions.append(fts[-1])
                     break
@@ -237,7 +242,7 @@ class EDSC(TriggerModel):
                     triggers.append(False)
                     predictions.append(np.nan)
 
-        return np.array(predictions), np.array(triggers)
+        return np.array(predictions), np.array(triggers), None
     
 
 class ECTS(TriggerModel):
@@ -249,8 +254,8 @@ class ECTS(TriggerModel):
 
     def __init__(self, 
                  timestamps, 
-                 support, 
-                 relaxed,
+                 support=0, 
+                 relaxed=False,
                  n_jobs=1):
         """
         Creates an ECTS instance.
@@ -259,6 +264,8 @@ class ECTS(TriggerModel):
         :param support: minimum support threshold
         :param relaxed: whether we use the Relaxed version or the normal
         """
+        
+        super().__init__()
         
         ######Constant attributes#######
         self.require_classifiers = False
@@ -454,8 +461,9 @@ class ECTS(TriggerModel):
     def __mpl_calculation(self, cluster):
 
         """Finds the MPL of discriminative clusters
-
+        
         :param cluster: The cluster of which we want to find it's MPL"""
+
         # Checking if the support condition is met
         index = self.labels[cluster[0]]
         if self.support > len(cluster) / self.occur[index]:
@@ -567,15 +575,15 @@ class ECTS(TriggerModel):
         time-series allows the prediction, then return that prediction
          """
         
-        predictions, triggers = [], []
+        predictions, triggers, times_idx = [], [], []
         nn = []
         candidates = []  # will hold the potential predictions
         cand_min_mpl = []
 
         for test_row in X:
-            for e in range(len(test_row)):
-                neigh = NearestNeighbors(n_neighbors=1, metric='euclidean').fit(self.data[:, 0:e + 1])
-                neighbors = neigh.kneighbors([test_row[0:e + 1]])
+            for e in self.timestamps:
+                neigh = NearestNeighbors(n_neighbors=1, metric='euclidean').fit(self.data[:, 0:e+1])
+                neighbors = neigh.kneighbors([test_row[0:e+1]])
                 candidates.clear()
                 cand_min_mpl.clear()
                 nn = neighbors[1]
@@ -589,17 +597,19 @@ class ECTS(TriggerModel):
                             cand_min_mpl.append(candidate)  # Keeping the candidates with the minimum mpl
                         else:
                             break  # From here on the mpl is going to get bigger
-
                     predictions.append(max(set(cand_min_mpl), key=cand_min_mpl.count))  # The second argument is the max label
                     triggers.append(True)
+                    times_idx.append(e)
                     break
                 elif len(candidates) == 1:  # We don't need to to do the above if we have only one nn
                     predictions.append(candidates[0][1])
                     triggers.append(True)
+                    times_idx.append(e)
                     break
 
             if len(candidates) == 0:
                 triggers.append(False)
                 predictions.append(np.nan)
+                times_idx.append(self.timestamps[-1])
 
-        return np.array(predictions), np.array(triggers)
+        return np.array(predictions), np.array(triggers), np.array(times_idx)
