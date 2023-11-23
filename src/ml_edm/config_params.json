@@ -7,37 +7,37 @@
     "min_length": 3,
     "alphas": [0.5, 0.5, 1.0],
     "classifiers": {
-        "WEASEL_V2": {"min_window": 3, "support_probabilities": 1, "n_jobs": 4, "random_state": 44},
-        "XGBClassifier": {"random_state": 42},
-        "RidgeClassifierCV" : {"alphas":[1.0e-03, 4.6e-03, 2.1e-02, 1e-01, 4.6e-01, 2.1e+00, 1e+01, 4.6e+01, 2e+02, 1e+03]}
+        "XGBClassifier": {"random_state": 42}, 
+        "RidgeClassifierCV" : {"alphas":[1.0e-03, 4.6e-03, 2.1e-02, 1e-01, 4.6e-01, 2.1e+00, 1e+01, 4.6e+01, 2e+02, 1e+03]}, 
+        "WEASEL_V2": {"min_window": 3, "support_probabilities": 1, "n_jobs": 4, "random_state": 44}
     },
     "extractors": {
-        "XGBClassifier": "tsfresh",
+        "XGBClassifier": {"method": "tsfresh", "path": "Documents/results/early_bench/models/", "params": {"n_jobs":5}},
         "RidgeClassifierCV": "minirocket"
     },
     "trigger_models": {
+        "ecdire": {},
+        "calimera": {},
         "proba_threshold": {},
         "economy": {},
         "stopping_rule": {},
         "teaser_avg_cost": {"objective": "avg_cost"},
         "teaser_hm": {},
-        "ecec": {},
-        "ecdire": {},
-        "calimera": {}
+        "ecec": {}
     },
     "val_ratio_trigger": 0.3, 
-    "datasets": ["Coffee", "CricketX", "CricketY", "CricketZ", "DiatiomSizeReduction", "ECG200", "FaceFour", "Fish", "GunPoint", "Haptics", "InlineSkate", 
-    "Lighting2", "Lighting7", "OliveOil", "OSULeaf", "SwedishLeaf", "Trace", "UWaveGestureLibraryY", "UWaveGestureLibraryZ"],
+    "datasets": ["ItalyPowerDemand", "InlineSkate", "Lighting2", "Lighting7", "OliveOil", "OSULeaf", "SwedishLeaf", "Trace", "UWaveGestureLibraryY", "UWaveGestureLibraryZ"],
 
     "good_datasets_economy": ["CBF", "ChlorineConcentration", "Crop", "ElectricDevices", "FaceAll", "FacesUCR", "FordA", "FreezerRegularTrain", "HandOutlines", "InsectWingbeatSound", "ItalyPowerDemand",
         "MedicalImages", "MelbournePedestrian", "MixedShapesRegularTrain", "MoteStrain", "NonInvasiveFetalECGThorax2", "PhalangesOutlinesCorrect", "ProximalPhalanxOutlineCorrect", 
         "SemgHandGenderCh2", "SonyAIBORobotSurface2", "StarLightCurves", "Strawberry", "TwoLeadECG", "TwoPatterns", "UWaveGestureLibraryX", "Wafer", "Yoga", "CinCECGTorso", "ECGFiveDays"],
 
-    "good_datasets_45": ["Coffee", "CricketX", "CricketY", "CricketZ", "DiatiomSizeReduction", "ECG200", "FaceFour", "Fish", "GunPoint", "Haptics", "InlineSkate", 
+    "good_datasets_45": ["Coffee", "CricketX", "CricketY", "CricketZ", "ECG200", "Fish", "GunPoint", "Haptics", "InlineSkate", 
         "Lighting2", "Lighting7", "OliveOil", "OSULeaf", "SwedishLeaf", "Trace", "UWaveGestureLibraryY", "UWaveGestureLibraryZ"], 
 
-    "problems_datasets": { "WordSynonyms, FiftyWords, Mallat, Symbols, Adiac, Beef": "not enough class samples in train", "ECG5000": "no all classes in y_trigger"}, 
+    "problems_datasets": { "WordSynonyms, FiftyWords, Mallat, Symbols, Adiac, Beef, DiatomSizeReduction, FaceFour": "not enough class samples in train", 
+            "ECG5000": "no all classes in y_trigger"}, 
     "split": "default",
-    "n_jobs": 3,
+    "n_jobs": 2,
     "random_state": 42
 }

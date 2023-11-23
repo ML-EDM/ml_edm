@@ -1,4 +1,10 @@
 import os
+os.environ["MKL_NUM_THREADS"] = "1" 
+os.environ["NUMEXPR_NUM_THREADS"] = "1" 
+os.environ["OMP_NUM_THREADS"] = "1" 
+
+os.environ['KMP_WARNINGS'] = 'off'
+
 import sys
 import glob
 import json
@@ -73,6 +79,20 @@ def load_dataset(dataset_name, split):
     os.chdir(os.path.expanduser('~'))
     return data_dict
 
+def extract_and_save_features(X, chrono_clf, path):
+
+    if not os.path.isdir(path):
+            os.makedirs(path)
+
+    for i, t in enumerate(chrono_clf.models_input_lengths):
+        Xt = X[:, :t]
+        Xt = chrono_clf.extractors[i].transform(Xt)
+
+        save_path = os.path.join(path, f"features_{i}.npy")
+        np.save(save_path, Xt)
+
+    return path
+
 def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alpha=None):
 
     chrono_clf = None
@@ -109,7 +129,7 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
         clf_name = type(base_classifier).__name__ if isinstance(chrono_clf, ChronologicalClassifiers) \
             else chrono_clf.model._get_name()
         if feature_extraction:
-            path = os.path.join(params['SAVEPATH_clf'], name, f"{clf_name}", feature_extraction)
+            path = os.path.join(params['SAVEPATH_clf'], name, f"{clf_name}", feature_extraction['method'])
         else:
             path = os.path.join(params['SAVEPATH_clf'], name, f"{clf_name}")
         if not os.path.isdir(path):
@@ -225,16 +245,26 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
 
             try:
                 features_extractor = params['extractors'][clf]
-                if isinstance(features_extractor, list):
-                    features_extractor = features_extractor[0]
-                    params['extractors'][clf].pop(0)
-                print(f"Using {clf} with {features_extractor} ...")
+                if isinstance(features_extractor['method'], list):
+                    features_extractor = features_extractor['method'][0]
+                    params['extractors'][clf]['method'].pop(0)
+                print(f"Using {clf} with {features_extractor['method']} ...")
             except KeyError:
                 features_extractor = None
                 print(f"Using {clf} ...")
-
+            
             chrono_clf, X_trigger, y_trigger = _fit_chrono_clf(data['X_train'], data['y_train'], dataset, 
                                                                base_clf, features_extractor, params, alpha)
+            if features_extractor:
+                try:
+                    path = os.path.join(features_extractor['path'], dataset, clf, features_extractor['method'])
+                    if not prefit_cost_unaware:
+                        extract_and_save_features(X_trigger, chrono_clf, path+'/train')
+                        extract_and_save_features(data['X_test'], chrono_clf, path+'/test')
+                    features_paths = {"train": path+'/train', "test": path+'/test'}
+                except KeyError:
+                    features_paths = None
+
             past_post = None
             for i, trigger in enumerate(params['trigger_models'].keys()):
                 # if trigger model invariant to classifiers used
@@ -249,9 +279,16 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
                 else:
+                    if features_paths:
+                        chrono_clf.feature_extraction = features_paths['train']
                     early_clf = _fit_early_classifier(X_trigger, y_trigger, dataset, chrono_clf, trigger, alpha, params)
 
                 get_post = True if i == 0 else False
+                if features_paths:
+                    early_clf.chronological_classifiers.feature_extraction = features_paths['test']
+                    if trigger == "ecdire":
+                            early_clf.new_chronological_classifiers.feature_extraction = features_paths['test']
+                            
                 metrics, post, add = get_output_metrics(early_clf, data['X_test'], data['y_test'], 
                                                         compute_post=get_post, dict_post_cache=past_post)
                 past_post = post
@@ -265,6 +302,8 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
+
+
 
 if __name__ == '__main__':
 
