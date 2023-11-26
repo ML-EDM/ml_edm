@@ -33,7 +33,7 @@ import trigger_models, trigger_models_full
 
 warnings.filterwarnings("ignore")
 
-PARAMSPATH = "src/ml_edm/config_params.json"
+PARAMSPATH = "config_params.json"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-s", "--save", default=True, action=argparse.BooleanOptionalAction,
