@@ -4,7 +4,22 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class ClassificationModel(nn.Module):
+from abc import ABC, abstractmethod
+class Deep_Classifiers(ABC):
+
+    def __init__(self):
+        self.embed_trigger_model = False
+
+    @abstractmethod
+    def compute_loss(self, probas, labels):
+        """
+        Compute specific model loss, 
+        could be changing if model embed 
+        trigger or not
+        """
+
+
+class ClassificationModel(nn.Module, Deep_Classifiers):
 
     def __init__(self, backbone, classif_head):
         super(ClassificationModel, self).__init__()
@@ -20,7 +35,7 @@ class ClassificationModel(nn.Module):
         loss = criterion(probas, labels)
         return loss 
 
-class ELECTS(nn.Module):
+class ELECTS(nn.Module, Deep_Classifiers):
 
     def __init__(self, input_dim, backbone, classif_head, alpha, epsilon):
         super(ELECTS, self).__init__()
@@ -39,7 +54,9 @@ class ELECTS(nn.Module):
             nn.Sigmoid()
         )
         # specific init to predict late at first epoch ???
-        torch.nn.init.normal_(self.decision_head[0].bias, mean=-2e1, std=1e-1)
+        torch.nn.init.normal_(self.decision_head[0].bias, mean=-3, std=1e-1)
+
+        self.embed_trigger_model = True
     
     def _sample_stop_decision(self, probas_stopping):
         dist = torch.stack([1-probas_stopping, probas_stopping], dim=1)
@@ -51,7 +68,7 @@ class ELECTS(nn.Module):
         outputs = self.backbone(x)
 
         probas_classes = self.clf_head(outputs)
-        probas_stopping = self.decision_head(outputs).squeeze()
+        probas_stopping = self.decision_head(outputs).reshape((len(x), -1))
 
         batch_size, sequence_length = probas_stopping.shape
 
@@ -62,7 +79,7 @@ class ELECTS(nn.Module):
                     trigger = self._sample_stop_decision(probas_stopping[:,t])
                     stops.append(trigger)
                 else:
-                    last_stop = torch.ones(trigger.shape).bool()
+                    last_stop = torch.ones((batch_size,)).bool()
                     stops.append(last_stop)
 
             stopped = torch.stack(stops, dim=1).bool()
@@ -90,8 +107,14 @@ class ELECTS(nn.Module):
             (prod[:, :-1] * probas_stopping[:, 1:], prod[:, -1:]), dim=-1
         ) + self.epsilon / sequence_length
 
-        criterion = nn.CrossEntropyLoss()
-        c_losses = pts * criterion(probas_classes.view(-1, n_classes), labels.view(-1))
+        #pts = self.calculate_probability_making_decision(probas_stopping)
+
+        criterion = nn.CrossEntropyLoss(reduction='none')
+        #criterion = nn.NLLLoss(reduction='none')
+
+        c_losses = pts * criterion(probas_classes.view(-1, n_classes), labels.view(-1)).view((batch_size, -1))
+        #c_losses = pts * criterion(torch.log(probas_classes).view(-1, n_classes), labels.view(-1)).view((batch_size, -1))
+
         c_loss = c_losses.sum(dim=1).mean()
 
         t = torch.ones(batch_size, sequence_length) * torch.arange(sequence_length)
@@ -104,20 +127,28 @@ class ELECTS(nn.Module):
 
         return loss
 
+    def calculate_probability_making_decision(self, deltas):
+        """
+        Equation 3: probability of making a decision
 
-"""
-from modules import LSTM, ClassificationHead
+        :param deltas: probability of stopping at each time t
+        :return: comulative probability of having stopped
+        """
+        batchsize, sequencelength = deltas.shape
 
-x = torch.randn((8, 24, 1))
-y = torch.randint(0, 2, (8,))
+        pts = list()
 
-model = ELECTS(1, LSTM(64, 128), ClassificationHead(128, 2), 0.5, 10)
+        initial_budget = torch.ones(batchsize, device=deltas.device)
 
-try:
-    probas_c, probas_s, a = model(x)
-except ValueError:
-    probas_c, probas_s = model(x)
+        budget = [initial_budget]
+        for t in range(1, sequencelength):
+            pt = deltas[:, t] * budget[-1]
+            budget.append(budget[-1] - pt)
+            pts.append(pt)
 
-l = model.compute_loss(probas_c, probas_s, y)
-print(l)
-"""
+        # last time
+        pt = budget[-1]
+        pts.append(pt)
+
+        return torch.stack(pts, dim=-1)
+    

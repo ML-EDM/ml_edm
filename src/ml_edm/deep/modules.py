@@ -24,7 +24,7 @@ class LSTM(nn.Module):
     
     def forward(self, x):
         if self.return_all_states:
-            return self.lstm(x)[0] # return all hidden states by def 
+            return self.lstm(x)[0] # return all hidden states 
         else:
             return self.lstm(x)[0][:,-1,:]
 

@@ -5,13 +5,19 @@ import torch
 import torch.nn as nn
 import torch.optim as opt
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, TensorDataset
 
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
-from deep_models import *
-from modules import *
+from deep.deep_models import *
+from deep.modules import *
+
+import sys
+sys.path.append("..")
+
+from utils import *
+from trigger_models import TriggerModel
 
 class EarlyStopping:
     def __init__(self, patience=5, min_delta=0):
@@ -31,24 +37,25 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
  
-class DeepChronologicalClassifier:
+class DeepChronologicalClassifier(TriggerModel):
 
     def __init__(self,
                  model,
-                 num_epochs=30,
+                 num_epochs=100,
                  batch_size=8,
                  optim_params={
-                     "lr": 1e-4, 
-                     "weight_decay": 1e-5
+                     "lr": 1e-3,
+                     "weight_decay": 5e-4
                     },
-                 early_stopping=False,
-                 patience=5,
+                 early_stopping=True,
+                 patience=20,
                  tol=1e-4,
                  device='cpu',
                  seed=42,
                  verbose=True,
                  models_input_lengths=None
     ):
+        super().__init__()
         self.model = model
 
         self.num_epochs = num_epochs
@@ -62,8 +69,6 @@ class DeepChronologicalClassifier:
         self.verbose = verbose
 
         self.models_input_lengths = models_input_lengths
-
-        self.embed_trigger_model = False 
     
     def _truncate_series(self, X, y):
 
@@ -99,7 +104,11 @@ class DeepChronologicalClassifier:
         val_losses = []
 
         self.model.eval()
-        val_dataloader = self._truncate_series(X, y)
+        if self.model.embed_trigger_model:
+            val_dataset = TensorDataset(X, y)
+            val_dataloader = DataLoader(val_dataset, batch_size=self.batch_size, drop_last=False)
+        else:
+            val_dataloader = self._truncate_series(X, y)
         for x_batch, y_batch in val_dataloader:
             
             try: # if deep model embed trigger model
@@ -125,13 +134,13 @@ class DeepChronologicalClassifier:
             self.n_dim = 1
             X = np.expand_dims(X, axis=-1)
         elif len(X.shape) == 3:
-            n_sample, self.max_length, self.n_dim = X.shape
+            n_sample, self.n_dim, self.max_length = X.shape
         
         if self.models_input_lengths is None:
             self.models_input_lengths = np.arange(1, self.max_length+1, 1)
 
         X, y = (torch.FloatTensor(X), torch.LongTensor(y))
-        n_classes = len(np.unique(y))
+        self.n_classes = len(np.unique(y))
 
         if self.early_stopping:
             X_train, X_val, y_train, y_val = train_test_split(
@@ -151,14 +160,18 @@ class DeepChronologicalClassifier:
         
         for epoch in pbar:
             pbar.set_description("Epoch number %s" % str(epoch+1)) if self.verbose else -1
-            train_dataloader = self._truncate_series(X_train, y_train)
+            if self.model.embed_trigger_model:
+                train_dataset = TensorDataset(X_train, y_train)
+                train_dataloader = DataLoader(train_dataset, batch_size=self.batch_size, drop_last=False)
+            else:
+                train_dataloader = self._truncate_series(X_train, y_train)
             batch_losses = []
 
             for x_batch, y_batch in train_dataloader:
                 self.model.train()
                 optimizer.zero_grad()
 
-                if self.embed_trigger_model: # if deep model embed trigger model
+                if self.model.embed_trigger_model: # if deep model embed trigger model
                     probas, stopping = self.model(x_batch.to(self.device))
                     loss = self.model.compute_loss(probas, stopping, y_batch.to(self.device))
                 else: 
@@ -184,33 +197,79 @@ class DeepChronologicalClassifier:
         return self
     
     def predict(self, X):
-        return self.predict_proba(X).argmax(-1)
+        if self.model.embed_trigger_model:
+            grouped_X = {}
+            for serie in X:
+                length = len(serie)
+                if length in grouped_X.keys():
+                    grouped_X[length].append(serie)
+                else:
+                    grouped_X[length] = [serie]
+            
+            predictions, t_triggers = [], []
+            self.model.eval()
+            with torch.no_grad():
+                for length, series in grouped_X.items():
+                    series = torch.FloatTensor(series).reshape((len(series), length, -1))
+                    preds, t = self.model(series, predict=True)
+                    predictions.append(preds.detach().numpy())
+                    t_triggers.extend(t.detach().tolist())
 
-    def predict_proba(self, X, past_probas=False):
-        
-        length = X.shape[1]
+            return predictions, None, t_triggers
+        else:
+            return self.predict_proba(X).argmax(-1)
 
-        try:
-            X = torch.FloatTensor(np.expand_dims(X, axis=-1))
-        except ValueError:
-            #if inhomogenous shape, i.e. different series lengths
-            X = [torch.FloatTensor(x)[:, None] for x in X]
+    def predict_proba(self, X):
 
-        predictions = []
-        self.model.eval()
+        # Validate X format with varying series lengths
+        #X, _ = check_X_y(X, None, equal_length=False)
 
-        with torch.no_grad():
-            if past_probas:
-                for ts in X:
-                    if length != 1:
-                        predictions.append(
-                            [self.model(ts[None, :j]).detach().numpy().squeeze()
-                            for j in self.models_input_lengths if j <= len(ts)]
-                        )
-                    else:
-                        predictions.append(self.model(ts[None, :1]).detach().numpy().squeeze())
+        # Group X by batch of same length
+        grouped_X = {}
+        for serie in X:
+            length = len(serie)
+            if length in grouped_X.keys():
+                grouped_X[length].append(serie)
             else:
-                predictions = self.model(X).detach().numpy()
+                grouped_X[length] = [serie]
+
+        predictions, triggers = [], []
+        self.model.eval()
+        with torch.no_grad():
+            for length, series in grouped_X.items():
+                series = torch.FloatTensor(series).reshape((len(series), length, -1))
+                if self.model.embed_trigger_model:
+                    preds, trigg = self.model(series)
+                    triggers.extend(trigg.detach().tolist())
+                else:
+                    preds = self.model(series)
+                    
+                predictions.append(preds.detach().numpy())
+
+        return np.vstack(predictions), np.array(triggers).squeeze()
+
+    def predict_past_proba(self, X):
+
+        # Validate X format with varying series lengths
+        #X, _ = check_X_y(X, None, equal_length=False)
+
+        # Group X by batch of same length
+        grouped_X = {}
+        for serie in X:
+            length = len(serie)
+            if length in grouped_X.keys():
+                grouped_X[length].append(serie)
+            else:
+                grouped_X[length] = [serie]
+        
+        predictions, triggers = [], []
+        for length, series in grouped_X.items():
+            series = torch.FloatTensor(series).reshape((len(series), length, -1))
+
+            all_probas = [self.model(series[:,:j,:]).detach().numpy().squeeze() 
+                          for j in range(1, length+1)]
+            all_probas = np.stack(all_probas).reshape((-1, length, self.n_classes))
+            predictions.extend(all_probas)
 
         return predictions
 
@@ -287,16 +346,20 @@ class BucketBatchSampler(Sampler):
         random.shuffle(self.batch_list)
         for i in self.batch_list:
             yield i
-    
-backbone = LSTM(input_dim=1, hidden_dim=64)
+
+""" 
+backbone = LSTM(input_dim=1, hidden_dim=64, return_all_states=True)
 clf_head = ClassificationHead(hidden_dim=64, n_classes=2)
-model = ClassificationModel(backbone, clf_head)
+model = ELECTS(1, backbone, clf_head, alpha=0.5, epsilon=10)
 
 clf = DeepChronologicalClassifier(model)
 
 x = torch.randn(((16,24,1)))
 y = np.random.random_integers(0, 1, 16)
 
+x = np.array(x)
 clf.fit(x, y)
+clf.predict([x[0,:,:], x[1,:10,:], x[-1,:10,:], x[2,:1,:]])
 
 y = model(x)
+"""
