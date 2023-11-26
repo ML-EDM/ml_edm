@@ -424,7 +424,7 @@ class ChronologicalClassifiers:
                     self.models_input_lengths == length
                 )[0][0]
                 series = np.array(series)
-                if self.feature_extraction and os.path.isdir(self.feature_extraction):
+                if self.feature_extraction and os.path.isdir(str(self.feature_extraction)):
                     series = np.load(self.feature_extraction+f"/features_{clf_idx}.npy")
                 elif self.feature_extraction:
                     series = self.extractors[clf_idx].transform(series)
@@ -479,7 +479,7 @@ class ChronologicalClassifiers:
                 if length != self.models_input_lengths[0]:
                     series = np.array(series) # allow for slicing
                     
-                    if self.feature_extraction and os.path.isdir(self.feature_extraction):
+                    if self.feature_extraction and os.path.isdir(str(self.feature_extraction)):
                         partial_series = [np.load(self.feature_extraction+f"/features_{j}.npy") 
                                           for j in range(clf_idx+1)]
                     elif self.feature_extraction:

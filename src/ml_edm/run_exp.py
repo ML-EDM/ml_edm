@@ -141,10 +141,10 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
 
     return chrono_clf, X_trigger, y_trigger
 
-def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, params):
+def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classes, params):
 
     cost_matrices = CostMatrices(chrono_clf.models_input_lengths, 
-                                 len(np.unique(y)), alpha=alpha)
+                                 n_classes, alpha=alpha)
 
     class_trigger = trigger_model
     if trigger_model in ['teaser_hm', 'teaser_avg_cost']:
@@ -235,6 +235,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
         print(f"Processing {dataset} ...")
         os.chdir(params['DATAPATH'])
         data = load_dataset(dataset, params['split'])
+        n_classes = len(np.unique(data['y_train']))
 
         for idx, clf in enumerate(params['classifiers'].keys()):
             
@@ -281,14 +282,15 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                 else:
                     if features_paths:
                         chrono_clf.feature_extraction = features_paths['train']
-                    early_clf = _fit_early_classifier(X_trigger, y_trigger, dataset, chrono_clf, trigger, alpha, params)
+                    early_clf = _fit_early_classifier(X_trigger, y_trigger, dataset, chrono_clf, 
+                                                      trigger, alpha, n_classes, params)
 
                 get_post = True if i == 0 else False
                 if features_paths:
                     early_clf.chronological_classifiers.feature_extraction = features_paths['test']
                     if trigger == "ecdire":
                             early_clf.new_chronological_classifiers.feature_extraction = features_paths['test']
-                            
+
                 metrics, post, add = get_output_metrics(early_clf, data['X_test'], data['y_test'], 
                                                         compute_post=get_post, dict_post_cache=past_post)
                 past_post = post

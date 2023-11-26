@@ -354,7 +354,7 @@ class EconomyGamma(TriggerModel):
                             "number of time series, T the number of input lengths that were used for prediction and P "
                             "the predicted class probabilities vectors.")
 
-        if X_probas.shape[2] != len(np.unique(y)):
+        if X_probas.shape[2] != self.cost_matrices.values.shape[2]:
             raise ValueError("X_probas probability vectors should have the same number of classes as the "
                              "cost matrices.")
         if len(X_probas) == 0:
@@ -916,9 +916,10 @@ class ECEC(TriggerModel):
             )
 
         candidates = np.unique(all_confidences)
-        candidates = [
-            (candidates[j] + candidates[j+1]) / 2 for j in range(len(candidates)-1)
-        ]
+        if len(candidates) > 1: # if only one candidates, pass
+            candidates = [
+                (candidates[j] + candidates[j+1]) / 2 for j in range(len(candidates)-1)
+            ]
 
         # find best threshold candidates 
         costs = Parallel(n_jobs=self.n_jobs) \
