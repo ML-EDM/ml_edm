@@ -98,7 +98,7 @@ class ProbabilityThreshold(TriggerModel):
             return self
         
         n_classes = len(np.unique(y))
-        candidate_threshold = np.linspace(1/n_classes, 1, 21)
+        candidate_threshold = np.linspace(1/n_classes, 1, 41)
 
         costs = Parallel(n_jobs=self.n_jobs) \
             (delayed(self._get_score)(threshold, X_probas, y) for threshold in candidate_threshold)
