@@ -25,7 +25,9 @@
         "teaser_hm": {},
         "ecec": {},
         "ecdire": {},
-        "calimera": {}
+        "calimera": {},
+        "edsc": {},
+        "ects": {}
     },
     "val_ratio_trigger": 0.4,
     "datasets": ["CBF", "ChlorineConcentration", "Crop", "ECGFiveDays", "ElectricDevices", "FaceAll", "FacesUCR", "FordA", 
