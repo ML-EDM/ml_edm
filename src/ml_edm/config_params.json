@@ -64,7 +64,7 @@
 
     "problems_datasets": { "not enough class in def train": ["WordSynonyms", "FiftyWords", "Mallat", "Symbols", "Adiac", "Beef", 
             "DiatomSizeReduction", "FaceFour", "BeetleFly", "Phoneme", "PigAirwayPressure"], 
-            "missing one class in y_trigger": "ECG5000, OliveOil, Rock, ShapesAll (economy)", 
+            "missing one class in y_trigger": "ECG5000, OliveOil, Rock, ShapesAll (eco)", 
             "contain nans": "DodgerLoopDay"}, 
     "split": "default",
     "n_jobs": 45,
