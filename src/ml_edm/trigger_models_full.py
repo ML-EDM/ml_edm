@@ -70,9 +70,9 @@ class EDSC(TriggerModel):
 
         return cst * dens 
     
-    def _kde_threshold(self, bmd_list, y):
+    def _kde_threshold(self, bmd_list, y, idx):
 
-        target = int(y[(bmd_list == 0)])
+        target = int(y[idx])
         prior_target = (y == target).mean()
 
         bmd_target = bmd_list[(y == target)]
@@ -126,9 +126,9 @@ class EDSC(TriggerModel):
         
         return proba
 
-    def _che_threshold(self, bmd_list, y):
+    def _che_threshold(self, bmd_list, y, idx):
 
-        target = int(y[(bmd_list == 0)])
+        target = int(y[idx])
         bmd_non_target = bmd_list[(y != target)]
 
         threshold = np.mean(bmd_non_target) - self.bound_threshold * np.std(bmd_non_target)
@@ -169,9 +169,9 @@ class EDSC(TriggerModel):
                     print("mdr")
 
                 if self.threshold_learning == 'kde':
-                    p = self._kde_threshold(bmd_list, y)
+                    p = self._kde_threshold(bmd_list, y, i)
                 elif self.threshold_learning == 'che':
-                    p = self._che_threshold(bmd_list, y)
+                    p = self._che_threshold(bmd_list, y, i)
                     
                 if p[0] > 0:
                     feature = (self.subsequences[length][i,j,:], p[0], p[1])
