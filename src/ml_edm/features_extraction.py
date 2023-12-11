@@ -25,6 +25,9 @@ class Feature_extractor:
             self.extractor = MiniRocket(**self.kwargs)
         elif self.method == 'tsfresh':
             self.extractor = TSFreshFeatureExtractor(**self.kwargs)
+        elif self.method == 'weasel2.0':
+            self.min_length = 4
+            self.extractor = WEASELTransformerV2(**self.kwargs)
         else:
             raise ValueError("Unknown features extraction method")
 
@@ -33,7 +36,11 @@ class Feature_extractor:
             X = self.scaler.transform(X)
 
         if X.shape[1] >= self.min_length:
-            self.extractor = self.extractor.fit(np.expand_dims(X, 1), y).transform
+            try:
+                self.extractor = self.extractor.fit(np.expand_dims(X, 1), y).transform
+            except AttributeError:
+                self.extractor.fit_transform(np.expand_dims(X, 1), y)
+                self.extractor = self.extractor.transform
         else:
             warn(f"Time series provided are too short for {self.method},"
                  "no extraction performed")

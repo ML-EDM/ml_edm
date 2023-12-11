@@ -282,7 +282,7 @@ class ChronologicalClassifiers:
             if self.feature_extraction:
                 scale = True if self.feature_extraction['method'] == 'minirocket' else False
                 self.extractors.append(Feature_extractor(self.feature_extraction['method'], scale, 
-                                                         kwargs=self.feature_extraction['params']).fit(Xt))
+                                                         kwargs=self.feature_extraction['params']).fit(Xt, y))
                 Xt = self.extractors[-1].transform(Xt)
 
             Xt_clf, X_calib, y_clf, y_calib = train_test_split(Xt, y, test_size=0.3, stratify=y,
@@ -337,15 +337,6 @@ class ChronologicalClassifiers:
                 grouped_X[length].append(serie)
             else:
                 grouped_X[length] = [serie]
-        
-        """
-        # Feature extraction is done on the whole predictions dataset to gain time.
-        if self.feature_extraction is True:
-            X = extract_features(X)
-            inputs_lengths = get_time_series_lengths(X)
-        else:
-            inputs_lengths = time_series_lengths
-        """
 
         # Return prior if no classifier fitted for time series this short, predict with classifier otherwise
         predictions = []
@@ -425,7 +416,10 @@ class ChronologicalClassifiers:
                 )[0][0]
                 series = np.array(series)
                 if self.feature_extraction and os.path.isdir(str(self.feature_extraction)):
-                    series = np.load(self.feature_extraction+f"/features_{clf_idx}.npy")
+                    fts_idx = clf_idx
+                    if hasattr(self, "prev_models_input_lengths"):
+                        fts_idx = np.where(self.prev_models_input_lengths == length)[0][0]
+                    series = np.load(self.feature_extraction+f"/features_{fts_idx}.npy")
                 elif self.feature_extraction:
                     series = self.extractors[clf_idx].transform(series)
 

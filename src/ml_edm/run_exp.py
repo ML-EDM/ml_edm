@@ -36,7 +36,7 @@ warnings.filterwarnings("ignore")
 PARAMSPATH = "config_params.json"
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-s", "--save", default=True, action=argparse.BooleanOptionalAction,
+parser.add_argument("-s", "--save", default=False, action=argparse.BooleanOptionalAction,
                     help="Whether or not to save classifiers and trigger models")
 parser.add_argument("-pl", "--preload_clf", default=False, action=argparse.BooleanOptionalAction,
                     help="Whether or not to preload the trained classifiers")
@@ -99,7 +99,7 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
     X_clf, X_trigger, y_clf, y_trigger = train_test_split(
         X, y, test_size=params['val_ratio_trigger'], 
         random_state=params['random_state'],
-        #stratify=y
+        stratify=y
     )
     if params['LOADPATH']: # load already fitted classifiers
         path = os.path.join(params['LOADPATH'], name, f"{type(base_classifier).__name__}", 'classifiers.pkl')
@@ -141,7 +141,7 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
 
     return chrono_clf, X_trigger, y_trigger
 
-def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classes, params):
+def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classes, params, features):
 
     cost_matrices = CostMatrices(chrono_clf.models_input_lengths, 
                                  n_classes, alpha=alpha)
@@ -167,7 +167,11 @@ def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classe
     if params['SAVEPATH_early_clf']:
         trigg_name = type(chrono_clf.base_classifier).__name__ if isinstance(chrono_clf, ChronologicalClassifiers) \
             else chrono_clf.model._get_name()
-        pp = os.path.join(params['SAVEPATH_early_clf'], name, f"{trigg_name}", f"alpha_{str(alpha)}")
+        if features:
+            pp = os.path.join(params['SAVEPATH_early_clf'], name, f"{trigg_name}", features['method'], f"alpha_{str(alpha)}")
+        else:
+            pp = os.path.join(params['SAVEPATH_early_clf'], name, f"{trigg_name}", f"alpha_{str(alpha)}")
+
         if not os.path.isdir(pp):
             os.mkdir(pp)
 
@@ -240,25 +244,26 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
         for idx, clf in enumerate(params['classifiers'].keys()):
             
             try:
-                base_clf = eval(clf)(**params['classifiers'][clf])
+                base_clf = eval(clf.split("_")[0])(**params['classifiers'][clf])
             except NameError:
                 base_clf = clf
 
             try:
-                features_extractor = params['extractors'][clf]
+                features_extractor = params['extractors'][clf].copy()
                 if isinstance(features_extractor['method'], list):
-                    features_extractor = features_extractor['method'][0]
+                    features_extractor['method'] = features_extractor['method'][0]
                     params['extractors'][clf]['method'].pop(0)
                 print(f"Using {clf} with {features_extractor['method']} ...")
             except KeyError:
                 features_extractor = None
                 print(f"Using {clf} ...")
             
+            # include z norm in chrono clf
             chrono_clf, X_trigger, y_trigger = _fit_chrono_clf(data['X_train'], data['y_train'], dataset, 
                                                                base_clf, features_extractor, params, alpha)
             if features_extractor:
                 try:
-                    path = os.path.join(features_extractor['path'], dataset, clf, features_extractor['method'])
+                    path = os.path.join(features_extractor['path'], dataset, type(chrono_clf.base_classifier).__name__, features_extractor['method'])
                     if not prefit_cost_unaware:
                         extract_and_save_features(X_trigger, chrono_clf, path+'/train')
                         extract_and_save_features(data['X_test'], chrono_clf, path+'/test')
@@ -276,19 +281,25 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                 print(f"Testing {trigger} ....")
                     
                 if prefit_cost_unaware and (trigger in ["ecdire", "edsc", "ects"]) and params['SAVEPATH_early_clf']:
-                    early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, clf, "alpha_0")
+                    if features_extractor:
+                        early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, clf, features_extractor['method'], "alpha_0")
+                    else:
+                        early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, clf, "alpha_0")
+
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
                 else:
-                    if features_paths:
-                        chrono_clf.feature_extraction = features_paths['train']
+                    if features_extractor:
+                        if features_paths:
+                            chrono_clf.feature_extraction = features_paths['train']
                     early_clf = _fit_early_classifier(X_trigger, y_trigger, dataset, chrono_clf, 
-                                                      trigger, alpha, n_classes, params)
+                                                      trigger, alpha, n_classes, params, features_extractor)
 
                 get_post = True if i == 0 else False
-                if features_paths:
-                    early_clf.chronological_classifiers.feature_extraction = features_paths['test']
-                    if trigger == "ecdire":
+                if features_extractor:
+                    if features_paths:
+                        early_clf.chronological_classifiers.feature_extraction = features_paths['test']
+                        if trigger == "ecdire":
                             early_clf.new_chronological_classifiers.feature_extraction = features_paths['test']
 
                 metrics, post, add = get_output_metrics(early_clf, data['X_test'], data['y_test'], 

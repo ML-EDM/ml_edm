@@ -71,8 +71,10 @@ class EDSC(TriggerModel):
         return cst * dens 
     
     def _kde_threshold(self, bmd_list, y, idx):
-
+        
         target = int(y[idx])
+        y = np.delete(y, idx)
+        
         prior_target = (y == target).mean()
 
         bmd_target = bmd_list[(y == target)]
@@ -129,22 +131,31 @@ class EDSC(TriggerModel):
     def _che_threshold(self, bmd_list, y, idx):
 
         target = int(y[idx])
+        y = np.delete(y, idx)
         bmd_non_target = bmd_list[(y != target)]
 
         threshold = np.mean(bmd_non_target) - self.bound_threshold * np.std(bmd_non_target)
 
         return threshold, target
     
-    def _get_utility(self, X, y, shapelet):
-
-        bmd_list, eml_list = [], []
-        for ts in X:
-            dists = [np.linalg.norm(shapelet[0] - ts[i:len(shapelet[0])+i])
-                     for i in range(len(ts) - len(shapelet[0]))]
-            
-            bmd_list.append(np.min(dists))
+    def _get_utility(self, X, y, shapelet, bmd_list, serie_idx):
         
-            eml = np.where(np.array(dists) <= shapelet[1])[0]
+        y = np.delete(y, serie_idx)
+        bmd_list_tmp = bmd_list
+
+        eml_list = []
+        for i, ts in enumerate(X):
+            
+            if i == serie_idx: # if considered shapelet comes from this serie
+                bmd_list_tmp = np.insert(bmd_list, i, 0.0)
+                continue
+
+            if shapelet[1] >= bmd_list_tmp[i]:
+                dists = [np.linalg.norm(shapelet[0] - ts[i:len(shapelet[0])+i])
+                        for i in range(len(ts) - len(shapelet[0]))]
+                eml = np.where(np.array(dists) <= shapelet[1])[0]
+            else:
+                eml = np.array([])
             eml = eml[0] if len(eml) > 0 else np.inf
             eml_list.append(eml + len(shapelet[0]))
 
@@ -152,21 +163,22 @@ class EDSC(TriggerModel):
         wrecall = np.power(eml_list, (-1/self.alpha))[class_mask].mean()
         
         thresh_mask = (np.array(bmd_list) <= shapelet[1])
-        precision = (y[thresh_mask] == shapelet[-1]).mean()
+        match_mask = (y[thresh_mask] == shapelet[-1]) 
+        precision = np.mean(match_mask) if len(match_mask) > 0 else 0
 
         utility = 2 * precision * wrecall / (precision + wrecall)
         coverage = thresh_mask & (y == shapelet[-1])
 
-        return utility, coverage
+        return np.nan_to_num(utility), coverage
 
     def _learn_shapelets(self, X, y, bmd, length):
         
         shapelets = []
         for i in range(len(X)):
-            for j, bmd_list in enumerate(bmd[length][i]):
-
-                if not isinstance(bmd_list, np.ndarray):
-                    print("mdr")
+            bmd_temp = np.array(
+                [[dd[length][ii] for dd in bmd[i]] for ii in range(len(bmd[i,0][length]))]
+            )
+            for j, bmd_list in enumerate(bmd_temp):
 
                 if self.threshold_learning == 'kde':
                     p = self._kde_threshold(bmd_list, y, i)
@@ -174,25 +186,72 @@ class EDSC(TriggerModel):
                     p = self._che_threshold(bmd_list, y, i)
                     
                 if p[0] > 0:
-                    feature = (self.subsequences[length][i,j,:], p[0], p[1])
-                    utility, coverage = self._get_utility(X, y, feature)
+                    feature = (X[i][j:j+self.min_length+length], p[0], p[1])
+                    # self.subsequences[length][i,j,:]
+                    utility, coverage = self._get_utility(X, y, feature, bmd_list, i)
                     shapelets.append((feature, coverage, utility))
 
         return shapelets
 
+    def _get_bmd_pair(self, arr1, arr2):
+
+        dists = [np.zeros((len(arr1)-j, len(arr1)-j))
+                 for j in range(self.min_length, self.max_length)]
+
+        for start1 in range(len(arr1) - self.min_length):
+            for start2 in range(len(arr2) - self.min_length):
+
+                d_squared = 0
+                sub1 = arr1[start1 : start1+self.min_length]
+                sub2 = arr2[start2 : start2+self.min_length]
+                d_squared = np.linalg.norm(sub1 - sub2) ** 2
+                dists[0][start1, start2] = np.sqrt(d_squared)
+                
+                offset1 = np.maximum(start1 - (len(arr1) - self.max_length), 0)
+                offset2 = np.maximum(start2 - (len(arr1) - self.max_length), 0)
+
+                lags1 = np.zeros((self.n_lengths-1,), dtype=int)
+                if offset1 > 0:
+                    lags1 = np.linspace(1, offset1, offset1, dtype=int)
+                    lags1 = np.pad(lags1, (self.n_lengths-len(lags1)-1,0))
+                
+                lags2 = np.zeros((self.n_lengths-1,), dtype=int)
+                if offset2 > 0:
+                    lags2 = np.linspace(1, offset2, offset2, dtype=int)
+                    lags2 = np.pad(lags2, (self.n_lengths-len(lags2)-1,0))
+
+                for i, l in enumerate(range(1, self.n_lengths)):
+                    idx = self.min_length + l - 1
+                    d_squared += (arr1[idx] - arr2[idx])**2
+                    dists[l][start1-lags1[i], start2-lags2[i]] = np.sqrt(d_squared)
+
+        return [np.min(d, 1) for d in dists]
+            
     def fit(self, X, y):
+
+        bmd = np.zeros((len(X), len(X)-1), dtype=object)
+        self.n_lengths = self.max_length - self.min_length
+
+        print("Computing distances...")
+        bmds = Parallel(n_jobs=self.n_jobs) \
+            (delayed(self._get_bmd_pair)(X[i], X[j]) 
+             for i in range(len(X)) 
+             for j in range(i+1, len(X)))
         
-        self.subsequences = []
-        results = Parallel(n_jobs=self.n_jobs) \
-            (delayed(self._get_bmd)(X, l) 
-             for l in range(self.min_length, self.max_length+1))
-        
-        bmd, self.subsequences = list(map(list, zip(*results)))
+        for i in range(len(X)):
+            idx = len(X) - i - 1
+            if i == 0:
+                bmd[i] = bmds[:int(idx)]
+            else:
+                bmd[i] = prev + bmds[:int(idx)]
+            prev = list(bmd[i][:i+1])
+            bmds = bmds[int(idx):]
 
         # learn some distance threshold 
+        print("Learning shapelets...")
         self.shapelets = Parallel(n_jobs=self.n_jobs) \
             (delayed(self._learn_shapelets)(X, y, bmd, l) 
-             for l in range(len(bmd)))
+             for l in range(self.n_lengths))
         # flatten the list of list
         self.shapelets = sum(self.shapelets, [])
         

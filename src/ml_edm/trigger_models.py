@@ -960,6 +960,7 @@ class ECDIRE(TriggerModel):
 
         self.models_input_lengths = copy.deepcopy(chronological_classifiers.models_input_lengths)
         self.chronological_classifiers = copy.deepcopy(chronological_classifiers)
+        self.chronological_classifiers.prev_models_input_lengths = self.models_input_lengths
 
         self.threshold_acc = threshold_acc
         self.cross_validation = cross_validation
@@ -1048,7 +1049,7 @@ class ECDIRE(TriggerModel):
         return np.array(thresholds)
         
     def fit(self, X, X_probas, y, classes_=None):
-        
+
         if self.cross_validation:
             rskf = RepeatedStratifiedKFold(random_state=4)
             results_cv = Parallel(n_jobs=self.n_jobs) \
