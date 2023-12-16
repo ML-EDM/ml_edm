@@ -54,7 +54,7 @@ class Feature_extractor:
     def transform(self, X, y=None):
         if self.scale:
             X = self.scaler.transform(X)
-        return np.array(self.extractor(np.expand_dims(X, 1), y))
+        return np.array(self.extractor(np.expand_dims(X, 1), y)).reshape(len(X),-1)
     
     def fit_transform(self, X, y=None):
         return self.fit(X, y).transform(X, y)

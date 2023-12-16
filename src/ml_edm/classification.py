@@ -285,8 +285,11 @@ class ChronologicalClassifiers:
                                                          kwargs=self.feature_extraction['params']).fit(Xt, y))
                 Xt = self.extractors[-1].transform(Xt)
 
-            Xt_clf, X_calib, y_clf, y_calib = train_test_split(Xt, y, test_size=0.3, stratify=y,
-                                                               random_state=self.random_state)         
+            if self.calibration:
+                Xt_clf, X_calib, y_clf, y_calib = train_test_split(Xt.reshape(len(X),-1), y, test_size=0.3, stratify=y,
+                                                                    random_state=self.random_state)
+            else:
+                Xt_clf, y_clf = (Xt.reshape(len(X),-1), y)
             self.classifiers[i].fit(Xt_clf, y_clf, *args, **kwargs)
             
             if self.calibration:
@@ -414,7 +417,7 @@ class ChronologicalClassifiers:
                 clf_idx = np.where(
                     self.models_input_lengths == length
                 )[0][0]
-                series = np.array(series)
+                series = np.array(series).reshape(len(series),-1)
                 if self.feature_extraction and os.path.isdir(str(self.feature_extraction)):
                     fts_idx = clf_idx
                     if hasattr(self, "prev_models_input_lengths"):
@@ -483,7 +486,7 @@ class ChronologicalClassifiers:
                             for j in range(clf_idx+1)
                         ]
                     else:
-                        partial_series = [series[:, :self.models_input_lengths[j]] 
+                        partial_series = [series[:, :self.models_input_lengths[j]].reshape(len(series),-1)
                                           for j in range(clf_idx+1)]
 
                     all_probas = [
@@ -632,9 +635,8 @@ class EarlyClassifier:
         #X_pred = np.stack([self.chronological_classifiers.predict_proba(X[:, :length])
         #                   for length in self.chronological_classifiers.models_input_lengths], axis=1)
         
-        X_probas = np.stack(self.chronological_classifiers.predict_past_proba(X))
-        
         if self.trigger_model.require_classifiers:
+            X_probas = np.stack(self.chronological_classifiers.predict_past_proba(X))
             self.trigger_model.fit(X, X_probas, y)
         else:
             self.trigger_model.fit(X, y)
@@ -784,7 +786,7 @@ class EarlyClassifier:
 
         for t, l in enumerate(self.models_input_lengths):
 
-            if isinstance(self.trigger_model, ECTS):
+            if not self.trigger_model.require_classifiers:
                 classes, triggers, all_t_star = self.trigger_model.predict(X)
                 def_preds = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
                 all_preds = np.nan_to_num(classes, nan=def_preds)
