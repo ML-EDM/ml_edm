@@ -102,7 +102,11 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
         stratify=y
     )
     if params['LOADPATH']: # load already fitted classifiers
-        path = os.path.join(params['LOADPATH'], name, f"{type(base_classifier).__name__}", 'classifiers.pkl')
+        if feature_extraction:
+            path = os.path.join(params['LOADPATH'], name, f"{type(base_classifier).__name__}", 
+                                feature_extraction['method'], 'classifiers.pkl')
+        else:
+            path = os.path.join(params['LOADPATH'], name, f"{type(base_classifier).__name__}", 'classifiers.pkl')
         with open(path, "rb") as clf_file:
             chrono_clf = pkl.load(clf_file)
 
@@ -162,7 +166,7 @@ def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classe
         trigger_params=trigger_params, 
         cost_matrices=cost_matrices
     )
-    e_clf.fit(X, y, trigger_proportion=0)
+    e_clf.fit(X, y, trigger_proportion=0) # load early clf ?
     
     if params['SAVEPATH_early_clf']:
         trigg_name = type(chrono_clf.base_classifier).__name__ if isinstance(chrono_clf, ChronologicalClassifiers) \
@@ -242,7 +246,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
         n_classes = len(np.unique(data['y_train']))
 
         for idx, clf in enumerate(params['classifiers'].keys()):
-            
+
             try:
                 base_clf = eval(clf.split("_")[0])(**params['classifiers'][clf])
             except NameError:
@@ -258,12 +262,12 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                 features_extractor = None
                 print(f"Using {clf} ...")
             
-            # include z norm in chrono clf
             chrono_clf, X_trigger, y_trigger = _fit_chrono_clf(data['X_train'], data['y_train'], dataset, 
                                                                base_clf, features_extractor, params, alpha)
             if features_extractor:
                 try:
-                    path = os.path.join(features_extractor['path'], dataset, type(chrono_clf.base_classifier).__name__, features_extractor['method'])
+                    path = os.path.join(features_extractor['path'], dataset, 
+                                        type(chrono_clf.base_classifier).__name__, features_extractor['method'])
                     if not prefit_cost_unaware:
                         extract_and_save_features(X_trigger, chrono_clf, path+'/train')
                         extract_and_save_features(data['X_test'], chrono_clf, path+'/test')
@@ -281,10 +285,16 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                 print(f"Testing {trigger} ....")
                     
                 if prefit_cost_unaware and (trigger in ["ecdire", "edsc", "ects"]) and params['SAVEPATH_early_clf']:
-                    if features_extractor:
-                        early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, clf, features_extractor['method'], "alpha_0")
+                    if trigger == 'ecdire':
+                        if features_extractor:
+                            early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, f"{type(base_clf).__name__}", 
+                                                    features_extractor['method'], "alpha_0")
+                        else:
+                            early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, 
+                                                    f"{type(base_clf).__name__}", "alpha_0")
                     else:
-                        early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, clf, "alpha_0")
+                        early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, "RidgeClassifierCV", 
+                                                  "minirocket", "aplha_0")
 
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
