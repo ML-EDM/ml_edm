@@ -350,6 +350,7 @@ if __name__ == '__main__':
         params['SAVEPATH_early_clf'] = None
     
     results = []
+    """
     # first run with parallelisation over trigger models 
     # to learn and save cost-unaware models 
     for name, p in params['trigger_models'].items():
@@ -358,7 +359,8 @@ if __name__ == '__main__':
 
     if args.save:
         params['LOADPATH'] = params['SAVEPATH_clf']
-
+    """
+    
     for name, p in params['trigger_models'].items():
         params['trigger_models'][name]['n_jobs'] = 1
     res = Parallel(n_jobs=params['n_jobs'], backend='multiprocessing') \
