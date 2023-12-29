@@ -294,7 +294,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                                                     f"{type(base_clf).__name__}", "alpha_0")
                     else:
                         early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, "RidgeClassifierCV", 
-                                                  "minirocket", "aplha_0")
+                                                  "minirocket", "alpha_0")
 
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
@@ -321,7 +321,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"tmp_res.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"tmp_res_ed.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
@@ -360,7 +360,6 @@ if __name__ == '__main__':
     if args.save:
         params['LOADPATH'] = params['SAVEPATH_clf']
     """
-    
     for name, p in params['trigger_models'].items():
         params['trigger_models'][name]['n_jobs'] = 1
     res = Parallel(n_jobs=params['n_jobs'], backend='multiprocessing') \
@@ -368,5 +367,5 @@ if __name__ == '__main__':
     results.extend(res)
     
     os.chdir(os.path.expanduser('~'))
-    with open(params['RESULTSPATH'] + 'results.json', 'w') as res_file:
+    with open(params['RESULTSPATH'] + 'results_ed.json', 'w') as res_file:
         json.dump(results, res_file, cls=NpEncoder)
