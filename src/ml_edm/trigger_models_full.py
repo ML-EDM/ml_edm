@@ -237,7 +237,7 @@ class EDSC(TriggerModel):
     def fit(self, X, y):
 
         self.n_lengths = self.max_length - self.min_length + 1 
-        bmd = np.zeros((len(X), len(X)-1, self.n_lengths, X.shape[1]-self.min_length+1))
+        bmd = np.zeros((len(X), len(X)-1, self.n_lengths, X.shape[1]-self.min_length+1), dtype=np.float16)
 
         print("Computing distances...")
         bmds = Parallel(n_jobs=self.n_jobs) \
