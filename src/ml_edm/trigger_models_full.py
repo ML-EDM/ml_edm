@@ -13,7 +13,7 @@ class EDSC(TriggerModel):
                  threshold_learning='che',
                  prob_trheshold=.95,
                  bound_threshold=3,
-                 alpha=3,
+                 alpha=6,
                  min_coverage=1.,
                  n_jobs=1):
         
@@ -73,7 +73,8 @@ class EDSC(TriggerModel):
     def _kde_threshold(self, bmd_list, y, idx):
         
         target = int(y[idx])
-        y = np.delete(y, idx)
+        bmd_list = np.insert(bmd_list, idx, 0.0)
+        #y = np.delete(y, idx)
         
         prior_target = (y == target).mean()
 
@@ -134,7 +135,7 @@ class EDSC(TriggerModel):
         y = np.delete(y, idx)
         bmd_non_target = bmd_list[(y != target)]
 
-        threshold = np.mean(bmd_non_target) - self.bound_threshold * np.std(bmd_non_target)
+        threshold = np.mean(bmd_non_target) - self.bound_threshold * np.var(bmd_non_target)
 
         return threshold, target
     
@@ -150,34 +151,39 @@ class EDSC(TriggerModel):
                 bmd_list_tmp = np.insert(bmd_list, i, 0.0)
                 continue
 
-            if shapelet[1] >= bmd_list_tmp[i]:
+            if shapelet[1] > bmd_list_tmp[i]:
                 dists = [np.linalg.norm(shapelet[0] - ts[i:len(shapelet[0])+i])
                         for i in range(len(ts) - len(shapelet[0]))]
                 eml = np.where(np.array(dists) <= shapelet[1])[0]
             else:
                 eml = np.array([])
+
             eml = eml[0] if len(eml) > 0 else np.inf
-            eml_list.append(eml + len(shapelet[0]))
+            eml_list.append(eml+len(shapelet[0]))
 
         class_mask = (y == shapelet[-1])
         wrecall = np.power(eml_list, (-1/self.alpha))[class_mask].mean()
+        #wrecall = np.power(eml_list, (-1/self.alpha)).sum() / (~class_mask).sum()
         
         thresh_mask = (np.array(bmd_list) <= shapelet[1])
         match_mask = (y[thresh_mask] == shapelet[-1]) 
         precision = np.mean(match_mask) if len(match_mask) > 0 else 0
 
         utility = 2 * precision * wrecall / (precision + wrecall)
-        coverage = thresh_mask & (y == shapelet[-1])
+        coverage = thresh_mask & class_mask
 
-        return np.nan_to_num(utility), coverage
+        return np.nan_to_num(utility), np.insert(coverage, serie_idx, True)
 
     def _learn_shapelets(self, X, y, bmd, length):
         
         shapelets = []
         for i in range(len(X)):
-            bmd_temp = np.array(
-                [[dd[length][ii] for dd in bmd[i]] for ii in range(len(bmd[i,0][length]))]
-            )
+
+            if length == 0:
+                bmd_temp = bmd[i,:,length].T
+            else:
+                bmd_temp = bmd[i,:,length].T[:-length]
+
             for j, bmd_list in enumerate(bmd_temp):
 
                 if self.threshold_learning == 'kde':
@@ -195,11 +201,11 @@ class EDSC(TriggerModel):
 
     def _get_bmd_pair(self, arr1, arr2):
 
-        dists = [np.zeros((len(arr1)-j, len(arr1)-j))
-                 for j in range(self.min_length, self.max_length)]
+        dists = [np.full((len(arr1)-self.min_length+1, len(arr1)-self.min_length+1), np.nan)
+                 for _ in range(self.n_lengths)]
 
-        for start1 in range(len(arr1) - self.min_length):
-            for start2 in range(len(arr2) - self.min_length):
+        for start1 in range(len(arr1) - self.min_length + 1):
+            for start2 in range(len(arr2) - self.min_length + 1):
 
                 d_squared = 0
                 sub1 = arr1[start1 : start1+self.min_length]
@@ -220,17 +226,18 @@ class EDSC(TriggerModel):
                     lags2 = np.linspace(1, offset2, offset2, dtype=int)
                     lags2 = np.pad(lags2, (self.n_lengths-len(lags2)-1,0))
 
-                for i, l in enumerate(range(1, self.n_lengths)):
-                    idx = self.min_length + l - 1
-                    d_squared += (arr1[idx] - arr2[idx])**2
-                    dists[l][start1-lags1[i], start2-lags2[i]] = np.sqrt(d_squared)
+                for i, l in enumerate(range(self.n_lengths - np.maximum(offset1, offset2) - 1)):
+                    idx1 = self.min_length + start1 + l
+                    idx2 = self.min_length + start2 + l
+                    d_squared += (arr1[idx1] - arr2[idx2])**2
+                    dists[l+1][start1, start2] = np.sqrt(d_squared)
 
-        return [np.min(d, 1) for d in dists]
+        return np.nanmin(dists, axis=2)
             
     def fit(self, X, y):
 
-        bmd = np.zeros((len(X), len(X)-1), dtype=object)
-        self.n_lengths = self.max_length - self.min_length
+        self.n_lengths = self.max_length - self.min_length + 1 
+        bmd = np.zeros((len(X), len(X)-1, self.n_lengths, X.shape[1]-self.min_length+1))
 
         print("Computing distances...")
         bmds = Parallel(n_jobs=self.n_jobs) \
@@ -242,9 +249,11 @@ class EDSC(TriggerModel):
             idx = len(X) - i - 1
             if i == 0:
                 bmd[i] = bmds[:int(idx)]
+            elif i == len(X)-1:
+                bmd[i] = prev
             else:
-                bmd[i] = prev + bmds[:int(idx)]
-            prev = list(bmd[i][:i+1])
+                bmd[i] = np.concatenate((prev, bmds[:int(idx)]), axis=0)
+            prev = bmd[i][:i+1]
             bmds = bmds[int(idx):]
 
         # learn some distance threshold 
@@ -252,9 +261,12 @@ class EDSC(TriggerModel):
         self.shapelets = Parallel(n_jobs=self.n_jobs) \
             (delayed(self._learn_shapelets)(X, y, bmd, l) 
              for l in range(self.n_lengths))
+
+        # release memory
+        del bmd
         # flatten the list of list
         self.shapelets = sum(self.shapelets, [])
-        
+
         # sort shapelets by utility
         self.shapelets = sorted(
             self.shapelets, key=lambda x: x[-1], reverse=True
@@ -275,33 +287,53 @@ class EDSC(TriggerModel):
         return self
     
     def predict(self, X):
+        
+        all_preds, all_triggers, all_t_star = (np.full((len(X),), np.nan), 
+                                               np.zeros((len(X),), dtype=bool), 
+                                               np.full((len(X),), np.nan))
+        min_L = min([len(fts[0]) for fts in self.features])
 
-        predictions, triggers = [], []
-        for ts in X:
-            # test features by utility ?
-            for j, fts in enumerate(self.features):
-                sub = fts[0]
-                if (len(sub) > len(ts)) and j != len(self.features)-1:
-                    continue
-                elif (len(sub) > len(ts)) and j == len(self.features)-1:
-                    triggers.append(False)
-                    predictions.append(np.nan)
-                    break
+        for l in range(min_L, X.shape[1]):
+            predictions, triggers, time_idx = [], [], []
+            for ts in X[:,:l]:
+                # test features by utility ?
+                for j, fts in enumerate(self.features):
+                    sub = fts[0]
+                    if (len(sub) > len(ts)) and j != len(self.features)-1:
+                        continue
+                    elif (len(sub) > len(ts)) and j == len(self.features)-1:
+                        triggers.append(False)
+                        predictions.append(np.nan)
+                        time_idx.append(X.shape[1])
+                        break
 
-                dists = [np.linalg.norm(sub - ts[i:i+len(sub)])
-                         for i in range(len(ts)-len(sub)+1)]
-                
-                trigger = (np.array(dists) <= fts[1])
-                if trigger.any():
-                    triggers.append(True)
-                    predictions.append(fts[-1])
-                    break
+                    dists = [np.linalg.norm(sub - ts[i:i+len(sub)])
+                            for i in range(len(ts)-len(sub))]
+                    
+                    trigger = (np.array(dists) <= fts[1])
+                    if trigger.any():
+                        triggers.append(True)
+                        predictions.append(fts[-1])
+                        time_idx.append(np.where(trigger)[0][0]+len(fts[0]))
+                        break
 
-                if j == len(self.features)-1:
-                    triggers.append(False)
-                    predictions.append(np.nan)
+                    if j == len(self.features)-1:
+                        triggers.append(False)
+                        predictions.append(np.nan)
+                        time_idx.append(X.shape[1])
 
-        return np.array(predictions), np.array(triggers), None
+            past_trigger = ~np.isnan(all_preds)
+            if len(past_trigger) > 0:
+                np.array(triggers)[past_trigger] = False
+
+            all_preds[triggers] = np.array(predictions)[triggers]
+            all_t_star[triggers] = np.array(time_idx)[triggers]
+            all_triggers[triggers] = True
+
+            if all_triggers.mean() == 1.:
+                break
+
+        return all_preds, all_triggers, np.nan_to_num(all_t_star, nan=X.shape[1])
     
 
 class ECTS(TriggerModel):

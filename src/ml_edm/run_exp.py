@@ -298,6 +298,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
 
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
+                    early_clf.cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, alpha=alpha)
                 else:
                     if features_extractor:
                         if features_paths:
@@ -321,7 +322,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"tmp_res_ed.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"tmp_res_edsc.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
@@ -350,22 +351,24 @@ if __name__ == '__main__':
         params['SAVEPATH_early_clf'] = None
     
     results = []
-    """
+    
     # first run with parallelisation over trigger models 
     # to learn and save cost-unaware models 
     for name, p in params['trigger_models'].items():
         params['trigger_models'][name]['n_jobs'] = params['n_jobs']
     results.append(train_for_one_alpha(params['alphas'][0], params, False))
 
+    """
     if args.save:
         params['LOADPATH'] = params['SAVEPATH_clf']
-    """
+    
     for name, p in params['trigger_models'].items():
         params['trigger_models'][name]['n_jobs'] = 1
     res = Parallel(n_jobs=params['n_jobs'], backend='multiprocessing') \
         (delayed(train_for_one_alpha)(a, params, True) for a in params['alphas'][1:])
     results.extend(res)
-    
+
     os.chdir(os.path.expanduser('~'))
-    with open(params['RESULTSPATH'] + 'results_ed.json', 'w') as res_file:
+    with open(params['RESULTSPATH'] + 'results_edsc.json', 'w') as res_file:
         json.dump(results, res_file, cls=NpEncoder)
+    """

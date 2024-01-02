@@ -790,6 +790,10 @@ class EarlyClassifier:
                 classes, triggers, all_t_star = self.trigger_model.predict(X)
                 def_preds = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
                 all_preds = np.nan_to_num(classes, nan=def_preds)
+                all_t_star = np.array(
+                    [self.models_input_lengths[np.searchsorted(self.models_input_lengths, val, side='left')] for val in all_t_star]
+                )
+
                 all_f_star = np.array([self.cost_matrices[np.where(self.models_input_lengths==t)[0][0]][int(all_preds[i])][y[i]] 
                                        for i, t in enumerate(all_t_star)])
                 break
