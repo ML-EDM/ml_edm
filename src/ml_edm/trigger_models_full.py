@@ -201,7 +201,7 @@ class EDSC(TriggerModel):
 
     def _get_bmd_pair(self, arr1, arr2):
 
-        dists = [np.full((len(arr1)-self.min_length+1, len(arr1)-self.min_length+1), np.nan)
+        dists = [np.full((len(arr1)-self.min_length+1, len(arr1)-self.min_length+1), np.nan, dtype=np.float16)
                  for _ in range(self.n_lengths)]
 
         for start1 in range(len(arr1) - self.min_length + 1):
