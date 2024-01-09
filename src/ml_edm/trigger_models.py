@@ -3,6 +3,7 @@ import random
 import numpy as np
 import pandas as pd
 
+from tqdm import tqdm
 from abc import ABC, abstractmethod
 from warnings import warn
 from itertools import permutations
@@ -260,6 +261,8 @@ class EconomyGamma(TriggerModel):
     def _get_costs(self, groups, timestamp, nb_intervals):
 
         timestamp_idx = np.nonzero(self.models_input_lengths == timestamp)[0][0]
+        t_star = -1
+
         for group in groups:
             costs = []
             # If series length is not covered return initial cost? Else estimate cost
@@ -280,9 +283,10 @@ class EconomyGamma(TriggerModel):
 
             timestamp_idx += 1
             if np.argmin(costs) == 0:
+                t_star = timestamp_idx
                 break
-
-        return np.array(costs)
+            
+        return np.array(costs), t_star
     
     def fit(self, X, X_probas, y, classes_=None):
         """
@@ -300,20 +304,6 @@ class EconomyGamma(TriggerModel):
         """
 
         # DATA VALIDATION / INTEGRITY
-        # cost_matrices
-        """
-        if isinstance(self.cost_matrices, list):
-            self.cost_matrices = np.array(self.cost_matrices)
-        elif not isinstance(self.cost_matrices, np.ndarray):
-            raise TypeError(
-                "Argument 'cost_matrices' should be an array of shape (T,Y,Y) with T the number of timestamps and Y"
-                "the number of classes.")
-        if self.cost_matrices.ndim != 3 or self.cost_matrices.shape[1] != self.cost_matrices.shape[2]:
-            raise ValueError(
-                "Argument 'cost_matrices' should be an array of shape (T,Y,Y) with T the number of timestamps and Y"
-                "the number of classes.")
-        """
-
         # models_input_lengths
         if isinstance(self.models_input_lengths, list):
             self.models_input_lengths = np.array(self.models_input_lengths)
@@ -391,6 +381,7 @@ class EconomyGamma(TriggerModel):
 
         # Initialize classes_, initial_class and multiclass
         self.classes_ = np.array(classes_) if classes_ is not None else np.arange(np.min(y), np.max(y)+1)
+        X_pred = X_probas.argmax(axis=-1)
         y = np.array([np.nonzero(self.classes_ == y_)[0][0] for y_ in y])
         prior_class_prediction = np.argmax(np.unique(y, return_counts=True)[1])
 
@@ -440,9 +431,13 @@ class EconomyGamma(TriggerModel):
             self.transition_matrices = self._get_transitions_matrices(X_intervals, k)
             self.confusion_matrices = self._get_confusion_matrices(X_probas, X_intervals, y, k)
             
-            mean_costs = np.mean(
-                [self._get_costs(group, self.models_input_lengths[0], k)[0]
-                 for group in X_intervals.T])
+            #mean_costs = np.mean(
+            #    [self._get_costs(group, self.models_input_lengths[0], k)[0]
+            #     for group in X_intervals.T])
+            
+            all_t_star_idx = [self._get_costs(group, self.models_input_lengths[0], k)[1] for group in X_intervals.T]
+            costs_tmp = [self.cost_matrices[t][X_pred[i, t]][y[i]] for i, t in enumerate(all_t_star_idx)]
+            mean_costs = np.mean(costs_tmp)
             
             if mean_costs < opt_costs:
                 opt_costs = mean_costs
@@ -527,7 +522,7 @@ class EconomyGamma(TriggerModel):
         triggers, costs = [], []
         returned_priors = False
         for n, group in enumerate(X_intervals):
-            prediction_forecasted_costs = self._get_costs([group], timestamps[n], self.nb_intervals)
+            prediction_forecasted_costs = self._get_costs([group], timestamps[n], self.nb_intervals)[0]
             prediction_forecasted_trigger = True if np.argmin(prediction_forecasted_costs) == 0 else False
             triggers.append(prediction_forecasted_trigger)
             costs.append(prediction_forecasted_costs)

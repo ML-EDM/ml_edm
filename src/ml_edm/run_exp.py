@@ -322,7 +322,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"tmp_res_cost_unaware.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"tmp_res_eco.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
@@ -351,6 +351,7 @@ if __name__ == '__main__':
         params['SAVEPATH_early_clf'] = None
     
     results = []
+
     """
     # first run with parallelisation over trigger models 
     # to learn and save cost-unaware models 
@@ -368,6 +369,8 @@ if __name__ == '__main__':
         (delayed(train_for_one_alpha)(a, params, True) for a in params['alphas'][1:])
     results.extend(res)
 
+    """
     os.chdir(os.path.expanduser('~'))
-    with open(params['RESULTSPATH'] + 'results_cost_unaware.json', 'w') as res_file:
+    with open(params['RESULTSPATH'] + 'results_eco.json', 'w') as res_file:
         json.dump(results, res_file, cls=NpEncoder)
+    """
