@@ -283,7 +283,7 @@ class EconomyGamma(TriggerModel):
 
             timestamp_idx += 1
             if np.argmin(costs) == 0:
-                t_star = timestamp_idx
+                t_star = timestamp_idx - 1
                 break
             
         return np.array(costs), t_star
