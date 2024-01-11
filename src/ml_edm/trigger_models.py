@@ -405,13 +405,14 @@ class EconomyGamma(TriggerModel):
         elif isinstance(self.nb_intervals, list):
             k_candidates = self.nb_intervals
         else:
-            max_candidates = np.minimum(11, (np.sqrt(len(X)) * 1/3).astype(int)+1)
+            max_candidates = np.minimum(11, (np.sqrt(len(X))).astype(int)+1)
             #max_candidates = 21
             k_candidates = np.arange(1, max_candidates)
         
         if len(k_candidates) == 0:
             k_candidates = [1]
-                    
+
+        """        
         if len(k_candidates) > 1:
             idx_sorted, idx_meta = train_test_split(
                 list(range(len(X_sorted.T))), test_size=2/3, stratify=y, random_state=42
@@ -420,6 +421,7 @@ class EconomyGamma(TriggerModel):
             X_sorted, X_meta = X_sorted[:, idx_sorted], X_sorted[:, idx_meta]
             X_probas, X_proba_meta = X_probas[idx_sorted, :, :], X_probas[idx_meta, :, :]
             y, y_meta = y[idx_sorted], y[idx_meta]
+        """
         
         opt_costs = np.inf
         for k in  k_candidates:
@@ -448,7 +450,7 @@ class EconomyGamma(TriggerModel):
                 self.nb_intervals = k
         
         if len(k_candidates) > 1:
-            X_sorted, X_probas, X_aggregated, y = X_meta, X_proba_meta, X_aggregated_meta, y_meta
+            #X_sorted, X_probas, X_aggregated, y = X_meta, X_proba_meta, X_aggregated_meta, y_meta
 
             thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_intervals+1)[1:-1].astype(int)
             self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)
