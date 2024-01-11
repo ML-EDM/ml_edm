@@ -405,8 +405,8 @@ class EconomyGamma(TriggerModel):
         elif isinstance(self.nb_intervals, list):
             k_candidates = self.nb_intervals
         else:
-            #max_candidates = np.minimum(21, np.sqrt(len(X)).astype(int)+1)
-            max_candidates = 11
+            max_candidates = np.minimum(11, (np.sqrt(len(X)) * 1/3).astype(int)+1)
+            #max_candidates = 21
             k_candidates = np.arange(1, max_candidates)
         
         if len(k_candidates) > 1:
