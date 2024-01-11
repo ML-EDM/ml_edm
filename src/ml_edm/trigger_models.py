@@ -409,6 +409,9 @@ class EconomyGamma(TriggerModel):
             #max_candidates = 21
             k_candidates = np.arange(1, max_candidates)
         
+        if len(k_candidates) == 0:
+            k_candidates = [1]
+                    
         if len(k_candidates) > 1:
             idx_sorted, idx_meta = train_test_split(
                 list(range(len(X_sorted.T))), test_size=2/3, stratify=y, random_state=42
