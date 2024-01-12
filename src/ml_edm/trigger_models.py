@@ -613,7 +613,7 @@ class StoppingRule(TriggerModel):
         self.max_length = X.shape[1]
 
         nb_gammas = 3 if self.stopping_rule == "SR1" else X_probas.shape[2]+1
-        self.candidates_gammas = list(permutations(np.linspace(-1, 1, 41), nb_gammas))
+        self.candidates_gammas = list(permutations(np.linspace(-1, 1, 11), nb_gammas))
 
         gamma_costs = Parallel(n_jobs=self.n_jobs) \
                     (delayed(self._get_score)(gammas, X_probas, y) for gammas in self.candidates_gammas)
