@@ -193,6 +193,7 @@ class EconomyGamma(TriggerModel):
                  models_input_lengths,
                  nb_intervals=None,
                  aggregation_function='max',
+                 split_k=None,
                  n_jobs=1):
         
         super().__init__()
@@ -200,6 +201,7 @@ class EconomyGamma(TriggerModel):
         self.models_input_lengths = models_input_lengths
         self.nb_intervals = nb_intervals
         self.aggregation_function = aggregation_function
+        self.split_k = split_k
         self.n_jobs = n_jobs
 
         self.thresholds = None
@@ -411,17 +413,19 @@ class EconomyGamma(TriggerModel):
         
         if len(k_candidates) == 0:
             k_candidates = [1]
-
-        """        
-        if len(k_candidates) > 1:
-            idx_sorted, idx_meta = train_test_split(
-                list(range(len(X_sorted.T))), test_size=2/3, stratify=y, random_state=42
-            )
-            X_aggregated, X_aggregated_meta = X_aggregated[idx_sorted, :], X_aggregated[idx_meta, :]
-            X_sorted, X_meta = X_sorted[:, idx_sorted], X_sorted[:, idx_meta]
-            X_probas, X_proba_meta = X_probas[idx_sorted, :, :], X_probas[idx_meta, :, :]
-            y, y_meta = y[idx_sorted], y[idx_meta]
-        """
+        
+        if self.split_k:
+            if len(k_candidates) > 1:
+                idx_sorted, idx_meta = train_test_split(
+                    list(range(len(X_sorted.T))), train_size=self.split_k, stratify=y, random_state=42
+                )      
+                X_aggregated, X_aggregated_meta = X_aggregated[idx_sorted, :], X_aggregated[idx_meta, :]
+                X_sorted, X_meta = X_sorted[:, idx_sorted], X_sorted[:, idx_meta]
+                X_probas, X_proba_meta = X_probas[idx_sorted, :, :], X_probas[idx_meta, :, :]
+                y, y_meta = y[idx_sorted], y[idx_meta]
+            else:
+                warn("split_k attribute is not None, but only one candidates given for k," 
+                     " using all training data to learn the model")
         
         opt_costs = np.inf
         for k in  k_candidates:
@@ -450,7 +454,8 @@ class EconomyGamma(TriggerModel):
                 self.nb_intervals = k
         
         if len(k_candidates) > 1:
-            #X_sorted, X_probas, X_aggregated, y = X_meta, X_proba_meta, X_aggregated_meta, y_meta
+            if self.split_k:
+                X_sorted, X_probas, X_aggregated, y = X_meta, X_proba_meta, X_aggregated_meta, y_meta
 
             thresholds_indices = np.linspace(0, X_sorted.shape[1], self.nb_intervals+1)[1:-1].astype(int)
             self.thresholds = X_sorted[:, thresholds_indices] # shape (T, K-1)

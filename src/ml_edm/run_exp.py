@@ -64,7 +64,7 @@ def load_dataset(dataset_name, split):
         X_ = np.concatenate((X_train, X_test), axis=0)
         y_ = np.concatenate((y_train, y_test), axis=0)
         
-        X_train, X_test, y_train, y_test = train_test_split(X_, y_, test_size=split, random_state=44)
+        X_train, X_test, y_train, y_test = train_test_split(X_, y_, train_size=split, random_state=44, stratify=y_)
     
     lb = LabelEncoder()
     y_train = lb.fit_transform(y_train)
@@ -153,6 +153,9 @@ def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classe
     class_trigger = trigger_model
     if trigger_model in ['teaser_hm', 'teaser_avg_cost']:
         class_trigger = 'teaser'
+    
+    if trigger_model in ['economy_vanilla']:
+        class_trigger = 'economy'
 
     try:
         trigger_params = params['trigger_models'][trigger_model]
@@ -322,7 +325,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"tmp_res_sr_10.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"tmp_res_good_split.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
@@ -352,7 +355,6 @@ if __name__ == '__main__':
     
     results = []
     
-    """
     # first run with parallelisation over trigger models 
     # to learn and save cost-unaware models 
     for name, p in params['trigger_models'].items():
@@ -361,8 +363,7 @@ if __name__ == '__main__':
 
     if args.save:
         params['LOADPATH'] = params['SAVEPATH_clf']
-    """
-    
+
     for name, p in params['trigger_models'].items():
         params['trigger_models'][name]['n_jobs'] = 1
     res = Parallel(n_jobs=params['n_jobs'], backend='multiprocessing') \
