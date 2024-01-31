@@ -22,7 +22,7 @@ from aeon.classification.distance_based import KNeighborsTimeSeriesClassifier
 
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from inspect import isclass, getmembers
 from joblib import Parallel, delayed
 
@@ -40,6 +40,8 @@ parser.add_argument("-s", "--save", default=False, action=argparse.BooleanOption
                     help="Whether or not to save classifiers and trigger models")
 parser.add_argument("-pl", "--preload_clf", default=False, action=argparse.BooleanOptionalAction,
                     help="Whether or not to preload the trained classifiers")
+parser.add_argument("-base", "--baseline", default=False, action=argparse.BooleanOptionalAction,
+                    help="Whether or not fit baselines trigger models")
 args = parser.parse_args()
 
 class NpEncoder(json.JSONEncoder):
@@ -52,7 +54,7 @@ class NpEncoder(json.JSONEncoder):
             return obj.tolist()
         return super(NpEncoder, self).default(obj)
     
-def load_dataset(dataset_name, split):
+def load_dataset(dataset_name, split, z_normalize=False):
     
     data_train = np.loadtxt(f'{dataset_name}/{dataset_name}_TRAIN.txt')
     data_test = np.loadtxt(f'{dataset_name}/{dataset_name}_TEST.txt')
@@ -66,6 +68,11 @@ def load_dataset(dataset_name, split):
         
         X_train, X_test, y_train, y_test = train_test_split(X_, y_, train_size=split, random_state=44, stratify=y_)
     
+    if z_normalize:
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
     lb = LabelEncoder()
     y_train = lb.fit_transform(y_train)
     y_test = lb.transform(y_test)
@@ -125,7 +132,8 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
             base_classifier=base_classifier,
             sampling_ratio=params['sampling_ratio'],
             min_length=params['min_length'],
-            feature_extraction=feature_extraction
+            feature_extraction=feature_extraction, 
+            calibration=True
         )
         chrono_clf.fit(X_clf, y_clf)
 
@@ -153,9 +161,12 @@ def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classe
     class_trigger = trigger_model
     if trigger_model in ['teaser_hm', 'teaser_avg_cost']:
         class_trigger = 'teaser'
-    
+
     if trigger_model in ['economy_vanilla']:
         class_trigger = 'economy'
+
+    if trigger_model in ['asap', 'alap']: # baselines with manual extreme thresholds
+        class_trigger = 'proba_threshold'
 
     try:
         trigger_params = params['trigger_models'][trigger_model]
@@ -245,7 +256,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
         #pbar_data.set_description("Processing %s" %dataset)
         print(f"Processing {dataset} ...")
         os.chdir(params['DATAPATH'])
-        data = load_dataset(dataset, params['split'])
+        data = load_dataset(dataset, params['split'], params['z_normalized'])
         n_classes = len(np.unique(data['y_train']))
 
         for idx, clf in enumerate(params['classifiers'].keys()):
@@ -325,11 +336,70 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"tmp_res_good_split.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"res_non_z.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
 
+def compute_baselines(alphas, params):
+
+    dict_trigger = dict.fromkeys(['asap', 'alap']) # As soon as possible vs as late as possible
+    dict_clf = dict.fromkeys(params['classifiers'])
+    dict_data = dict.fromkeys(params['datasets'])
+    metrics = {k1 : {k2: copy.deepcopy(dict_data) for k2, _ in copy.deepcopy(dict_clf).items()} 
+               for k1, _ in copy.deepcopy(dict_trigger).items()}
+    metrics_alpha = {alpha : copy.deepcopy(metrics) for alpha in alphas}
+
+    os.chdir(os.path.expanduser('~'))
+    for dataset in params["datasets"]:
+        print(f"Processing {dataset} ...")
+        os.chdir(params['DATAPATH'])
+        data = load_dataset(dataset, params['split'])
+        n_classes = len(np.unique(data['y_train']))
+
+        for clf in params['classifiers'].keys():
+            try:
+                base_clf = eval(clf.split("_")[0])(**params['classifiers'][clf])
+            except NameError:
+                base_clf = clf
+            try:
+                features_extractor = params['extractors'][clf].copy()
+                if isinstance(features_extractor['method'], list):
+                    features_extractor['method'] = features_extractor['method'][0]
+                    params['extractors'][clf]['method'].pop(0)
+                print(f"Using {clf} with {features_extractor['method']} ...")
+            except KeyError:
+                features_extractor = None
+                print(f"Using {clf} ...")
+            
+            chrono_clf, X_trigger, y_trigger = _fit_chrono_clf(data['X_train'], data['y_train'], dataset, 
+                                                               base_clf, features_extractor, params)
+            
+            for alpha in alphas:
+                for trigger in params['trigger_models'].keys():
+                    print(f"Testing {trigger} with alpha : {alpha} ....")
+                    
+                    early_clf = _fit_early_classifier(X_trigger, y_trigger, dataset, chrono_clf, 
+                                            trigger, alpha, n_classes, params, features_extractor) 
+                    m = early_clf.score(data['X_test'], data['y_test'], return_metrics=True)       
+                    metrics_alpha[alpha][trigger][clf][dataset] = copy.deepcopy(m)
+
+                """
+                if dict_alpha[alpha]:
+                    dict_alpha[alpha] = {**dict_alpha[alpha], **metrics}
+                else:
+                    dict_alpha[alpha] = copy.deepcopy(metrics)
+                """
+    
+    for alpha in  alphas:
+        path = os.path.join(params['RESULTSPATH'], f"alpha_{str(alpha)}")
+        if not os.path.isdir(path):
+            os.mkdir(path)
+            
+        with open(os.path.join(path, f"baselines.json"), "w") as tmp_file:
+            json.dump(metrics_alpha[alpha], tmp_file, cls=NpEncoder)
+    
+    return metrics_alpha 
 
 
 if __name__ == '__main__':
@@ -354,7 +424,6 @@ if __name__ == '__main__':
         params['SAVEPATH_early_clf'] = None
     
     results = []
-    
     # first run with parallelisation over trigger models 
     # to learn and save cost-unaware models 
     for name, p in params['trigger_models'].items():
@@ -370,8 +439,9 @@ if __name__ == '__main__':
         (delayed(train_for_one_alpha)(a, params, True) for a in params['alphas'][1:])
     results.extend(res)
 
-    """
-    os.chdir(os.path.expanduser('~'))
-    with open(params['RESULTSPATH'] + 'results_eco.json', 'w') as res_file:
-        json.dump(results, res_file, cls=NpEncoder)
-    """
+    #os.chdir(os.path.expanduser('~'))
+    #with open(params['RESULTSPATH'] + 'results_eco.json', 'w') as res_file:
+    #    json.dump(results, res_file, cls=NpEncoder)
+    
+    #if args.baseline:
+    #    compute_baselines(params['alphas'], params)

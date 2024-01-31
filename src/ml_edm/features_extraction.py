@@ -3,6 +3,7 @@ import os
 import numpy as np
 from warnings import warn
 
+from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from aeon.classification.dictionary_based._weasel_v2 import WEASELTransformerV2
 from aeon.transformations.collection.tsfresh import TSFreshFeatureExtractor
@@ -32,8 +33,12 @@ class Feature_extractor:
             raise ValueError("Unknown features extraction method")
 
         if self.scale:
-            self.scaler = StandardScaler(with_mean=False).fit(X)
-            X = self.scaler.transform(X)
+            self.scaler = StandardScaler(with_mean=False)
+            #X = self.scaler.fit_transform(X, y)
+            self.extractor = make_pipeline(
+                self.extractor,
+                self.scaler
+            )
 
         if X.shape[1] >= self.min_length:
             try:
@@ -52,9 +57,9 @@ class Feature_extractor:
         return x.squeeze()
     
     def transform(self, X, y=None):
-        if self.scale:
-            X = self.scaler.transform(X)
-        return np.array(self.extractor(np.expand_dims(X, 1), y)).reshape(len(X),-1)
+        #if self.scale:
+        #    X = self.scaler.transform(X)
+        return np.array(self.extractor(np.expand_dims(X, 1))).reshape(len(X),-1)
     
     def fit_transform(self, X, y=None):
         return self.fit(X, y).transform(X, y)

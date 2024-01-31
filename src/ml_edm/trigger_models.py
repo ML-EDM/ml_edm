@@ -678,7 +678,7 @@ class TEASER(TriggerModel):
         preds = probas.argmax(axis=-1)
 
         features = np.concatenate(
-            (probas, preds[:, None], diff[:, None]), axis=-1
+            (probas, diff[:, None]), axis=-1
         )
 
         return features 
@@ -696,7 +696,7 @@ class TEASER(TriggerModel):
                 estimator=oc_clf,
                 param_grid=gamma_grid,
                 scoring='accuracy',
-                cv=min(len(oc_features[masks_pos_probas]), 5),
+                cv=min(len(oc_features[masks_pos_probas]), 10),
                 n_jobs=1
             )
             # train the set of master classifiers only
@@ -793,7 +793,7 @@ class TEASER(TriggerModel):
 
         triggers = []
         for i, probas in enumerate(X_probas):
-            if timestamps[i] < self.best_v:
+            if np.where(self.models_input_lengths == timestamps[i])[0][0]+1 < self.best_v:
                 triggers.append(False)
             else:
                 probas = np.array(probas).reshape((-1, self.n_classes))
@@ -1058,7 +1058,7 @@ class ECDIRE(TriggerModel):
     def fit(self, X, X_probas, y, classes_=None):
 
         if self.cross_validation:
-            rskf = RepeatedStratifiedKFold(random_state=4)
+            rskf = RepeatedStratifiedKFold(random_state=42)
             results_cv = Parallel(n_jobs=self.n_jobs) \
                 (delayed(self._fit_cv)(X, y, train_idx, test_idx) for train_idx, test_idx in rskf.split(X, y)) 
         
