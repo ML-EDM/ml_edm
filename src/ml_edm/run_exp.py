@@ -156,8 +156,8 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
 def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classes, params, features):
 
     def delay_cost(t):
-        inflexion_point = 10
-        return np.exp(*((t/X.shape[1])-inflexion_point) * np.log(10000))
+        inflexion_point = 0.5
+        return np.exp(((t/X.shape[1])-inflexion_point) * np.log(10000))
     
     small_values = (n_classes / (n_classes+99))
     misclf_cost = small_values - np.eye(n_classes) * small_values
