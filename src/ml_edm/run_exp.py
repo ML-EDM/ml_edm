@@ -155,8 +155,19 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
 
 def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classes, params, features):
 
-    cost_matrices = CostMatrices(chrono_clf.models_input_lengths, 
-                                 n_classes, alpha=alpha)
+    def delay_cost(t):
+        inflexion_point = 10
+        return np.exp(*((t/X.shape[1])-inflexion_point) * np.log(10000))
+    
+    small_values = (n_classes / (n_classes+99))
+    misclf_cost = small_values - np.eye(n_classes) * small_values
+
+    classes, counts = np.unique(y, return_counts=True)
+    idx_min_class = classes[counts.argmin()]
+    misclf_cost[:, idx_min_class] *= 100
+    
+    cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, alpha=alpha, 
+                                 delay_cost=delay_cost, missclf_cost=None)
 
     class_trigger = trigger_model
     if trigger_model in ['teaser_hm', 'teaser_avg_cost']:
@@ -336,7 +347,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"res_non_z.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"res_bench4_exp_delay.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
@@ -346,7 +357,7 @@ def compute_baselines(alphas, params):
     dict_trigger = dict.fromkeys(['asap', 'alap']) # As soon as possible vs as late as possible
     dict_clf = dict.fromkeys(params['classifiers'])
     dict_data = dict.fromkeys(params['datasets'])
-    metrics = {k1 : {k2: copy.deepcopy(dict_data) for k2, _ in copy.deepcopy(dict_clf).items()} 
+    metrics = {k1 : {k2: copy.deepcopy(dict_data) for k2, _ in copy.deepcopy(dict_clf).items()}
                for k1, _ in copy.deepcopy(dict_trigger).items()}
     metrics_alpha = {alpha : copy.deepcopy(metrics) for alpha in alphas}
 
@@ -383,24 +394,16 @@ def compute_baselines(alphas, params):
                                             trigger, alpha, n_classes, params, features_extractor) 
                     m = early_clf.score(data['X_test'], data['y_test'], return_metrics=True)       
                     metrics_alpha[alpha][trigger][clf][dataset] = copy.deepcopy(m)
-
-                """
-                if dict_alpha[alpha]:
-                    dict_alpha[alpha] = {**dict_alpha[alpha], **metrics}
-                else:
-                    dict_alpha[alpha] = copy.deepcopy(metrics)
-                """
     
     for alpha in  alphas:
         path = os.path.join(params['RESULTSPATH'], f"alpha_{str(alpha)}")
         if not os.path.isdir(path):
             os.mkdir(path)
             
-        with open(os.path.join(path, f"baselines.json"), "w") as tmp_file:
+        with open(os.path.join(path, f"baselines_weasel.json"), "w") as tmp_file:
             json.dump(metrics_alpha[alpha], tmp_file, cls=NpEncoder)
     
     return metrics_alpha 
-
 
 if __name__ == '__main__':
 
