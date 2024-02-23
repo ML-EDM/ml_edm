@@ -159,12 +159,14 @@ def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classe
         inflexion_point = 0.5
         return np.exp(((t/X.shape[1])-inflexion_point) * np.log(10000))
     
+    """
     small_values = (n_classes / (n_classes+99))
     misclf_cost = small_values - np.eye(n_classes) * small_values
 
     classes, counts = np.unique(y, return_counts=True)
     idx_min_class = classes[counts.argmin()]
     misclf_cost[:, idx_min_class] *= 100
+    """
     
     cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, alpha=alpha, 
                                  delay_cost=delay_cost, missclf_cost=None)
@@ -323,7 +325,12 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
 
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
-                    early_clf.cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, alpha=alpha)
+                    
+                    def delay_cost(t):
+                        inflexion_point = 0.5
+                        return np.exp(((t/data['X_train'].shape[1])-inflexion_point) * np.log(10000))
+                    early_clf.cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, 
+                                                           alpha=alpha, delay_cost=delay_cost)
                 else:
                     if features_extractor:
                         if features_paths:
