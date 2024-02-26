@@ -775,9 +775,9 @@ class EarlyClassifier:
         past_trigger = np.zeros((X.shape[0], )).astype(bool)
         trigger_mask = np.zeros((X.shape[0], )).astype(bool)
 
-        all_preds = np.zeros((X.shape[0], )) - 1
-        all_t_star = np.zeros((X.shape[0], )) - 1
-        all_f_star = np.zeros((X.shape[0], )) - 1
+        all_preds = np.zeros((X.shape[0],))-1
+        all_t_star = np.zeros((X.shape[0],))-1
+        all_f_star = np.zeros((X.shape[0],))-1
 
         if self.trigger_model.require_past_probas:
             all_probas = np.array(
@@ -829,7 +829,7 @@ class EarlyClassifier:
                 if np.isnan(all_preds).any():
                     all_preds[np.where(np.isnan(all_preds))] = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
 
-                all_f_star[np.where(all_f_star < 0)] = np.array([self.cost_matrices[-1][int(p)][y[i]]
+                all_f_star[np.where(all_f_star < 0)] = np.array([self.cost_matrices[-1][int(p)][y[np.where(all_f_star < 0)][i]]
                                                                 for i, p in enumerate(all_preds[np.where(all_f_star < 0)])])
                 break
                 
