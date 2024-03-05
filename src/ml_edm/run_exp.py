@@ -16,7 +16,7 @@ import numpy as np
 import pickle as pkl
 from sktime.classification.kernel_based import RocketClassifier
 from xgboost import XGBClassifier
-from sklearn.linear_model import RidgeClassifierCV
+from sklearn.linear_model import RidgeClassifierCV, LogisticRegressionCV
 from aeon.classification.dictionary_based import WEASEL_V2
 from aeon.classification.distance_based import KNeighborsTimeSeriesClassifier
 
@@ -128,12 +128,13 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
         )
         chrono_clf.fit(X, y)
     else:
+        calib = bool(params['calib'])
         chrono_clf = ChronologicalClassifiers(
             base_classifier=base_classifier,
             sampling_ratio=params['sampling_ratio'],
             min_length=params['min_length'],
             feature_extraction=feature_extraction, 
-            calibration=True
+            calibration=calib
         )
         chrono_clf.fit(X_clf, y_clf)
 
@@ -156,20 +157,19 @@ def _fit_chrono_clf(X, y, name, base_classifier, feature_extraction, params, alp
 def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classes, params, features):
 
     def delay_cost(t):
-        inflexion_point = 0.5
-        return np.exp(((t/X.shape[1])-inflexion_point) * np.log(10000))
+        inflexion_point = 0
+        return np.exp(((t/X.shape[1])-inflexion_point) * np.log(100))
     
-    """
-    small_values = (n_classes / (n_classes+99))
+    #small_values = (n_classes / (n_classes+9))
+    small_values = 1
     misclf_cost = small_values - np.eye(n_classes) * small_values
 
     classes, counts = np.unique(y, return_counts=True)
     idx_min_class = classes[counts.argmin()]
-    misclf_cost[:, idx_min_class] *= 100
-    """
-    
+    misclf_cost[:, idx_min_class] *= 10
+
     cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, alpha=alpha, 
-                                 delay_cost=delay_cost, missclf_cost=None)
+                                 delay_cost=delay_cost, missclf_cost=misclf_cost)
 
     class_trigger = trigger_model
     if trigger_model in ['teaser_hm', 'teaser_avg_cost']:
@@ -315,20 +315,20 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                     if trigger == 'ecdire':
                         if features_extractor:
                             early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, f"{type(base_clf).__name__}", 
-                                                    features_extractor['method'], "alpha_0")
+                                                    features_extractor['method'], f"alpha_{alpha}")
                         else:
                             early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, 
-                                                    f"{type(base_clf).__name__}", "alpha_0")
+                                                    f"{type(base_clf).__name__}", f"alpha_{alpha}")
                     else:
                         early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, "RidgeClassifierCV", 
-                                                  "minirocket", "alpha_0")
+                                                  "minirocket", f"alpha_{alpha}")
 
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
                     
                     def delay_cost(t):
-                        inflexion_point = 0.5
-                        return np.exp(((t/data['X_train'].shape[1])-inflexion_point) * np.log(10000))
+                        inflexion_point = 0
+                        return np.exp(((t/data['X_train'].shape[1])-inflexion_point) * np.log(100))
                     early_clf.cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, 
                                                            alpha=alpha, delay_cost=delay_cost)
                 else:
@@ -354,14 +354,15 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     if not os.path.isdir(tmp_dir):
         os.mkdir(tmp_dir)
 
-    with open(os.path.join(tmp_dir, f"res_bench4_exp_delay.json"), "w") as tmp_file:
+    with open(os.path.join(tmp_dir, f"res_bench4_exp_des.json"), "w") as tmp_file:
         json.dump(metrics_alpha, tmp_file, cls=NpEncoder)
 
     return {alpha: metrics_alpha}
 
 def compute_baselines(alphas, params):
 
-    dict_trigger = dict.fromkeys(['asap', 'alap']) # As soon as possible vs as late as possible
+    #dict_trigger = dict.fromkeys(['asap', 'alap']) # As soon as possible vs as late as possible
+    dict_trigger = dict.fromkeys(params['trigger_models'].keys())
     dict_clf = dict.fromkeys(params['classifiers'])
     dict_data = dict.fromkeys(params['datasets'])
     metrics = {k1 : {k2: copy.deepcopy(dict_data) for k2, _ in copy.deepcopy(dict_clf).items()}
@@ -407,7 +408,7 @@ def compute_baselines(alphas, params):
         if not os.path.isdir(path):
             os.mkdir(path)
             
-        with open(os.path.join(path, f"baselines_weasel.json"), "w") as tmp_file:
+        with open(os.path.join(path, f"baselines_ridgeclassifiercv_minirocket.json"), "w") as tmp_file:
             json.dump(metrics_alpha[alpha], tmp_file, cls=NpEncoder)
     
     return metrics_alpha 
@@ -448,7 +449,7 @@ if __name__ == '__main__':
     res = Parallel(n_jobs=params['n_jobs'], backend='multiprocessing') \
         (delayed(train_for_one_alpha)(a, params, True) for a in params['alphas'][1:])
     results.extend(res)
-
+    
     #os.chdir(os.path.expanduser('~'))
     #with open(params['RESULTSPATH'] + 'results_eco.json', 'w') as res_file:
     #    json.dump(results, res_file, cls=NpEncoder)

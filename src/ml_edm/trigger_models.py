@@ -251,7 +251,8 @@ class EconomyGamma(TriggerModel):
         for t in range(len(self.models_input_lengths)-1):
             transition_matrices.append(
                 np.array(
-                    [np.array([np.sum((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(nb_intervals)]) /
+                    [np.array([np.sum(
+                        (X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(nb_intervals)]) /
                         np.sum(X_intervals[t] == i) for i in range(nb_intervals)]
                 )
             )
@@ -278,7 +279,7 @@ class EconomyGamma(TriggerModel):
 
             for t in range(timestamp_idx, len(self.models_input_lengths)):
                 
-                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t])
+                cost = np.sum(gamma[:,None,None] * self.confusion_matrices[t] * self.cost_matrices[t].T)
                 costs.append(cost)
                 if t != len(self.models_input_lengths) - 1:
                     gamma = np.matmul(gamma, self.transition_matrices[t])  # Update interval markov probability
@@ -390,7 +391,7 @@ class EconomyGamma(TriggerModel):
         # TODO: make sure there is no pathological behaviour linked to using initial_cost
         self.initial_cost = np.sum(
             np.unique(y, return_counts=True)[1]/y.shape[0] *
-            self.cost_matrices[0,:,prior_class_prediction]
+            self.cost_matrices[0,prior_class_prediction,:]
         )
         self.multiclass = False if len(self.classes_) <= 2 else True
 
