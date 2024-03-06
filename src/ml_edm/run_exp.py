@@ -256,6 +256,7 @@ def get_output_metrics(early_clf, X, y, compute_post=False, dict_post_cache=None
 
 def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
     
+    alpha0 = params['alphas'][0]
     dict_trigger = dict.fromkeys(params['trigger_models'])
     dict_clf = dict.fromkeys(params['classifiers'])
     dict_data = dict.fromkeys(params['datasets'])
@@ -315,13 +316,13 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                     if trigger == 'ecdire':
                         if features_extractor:
                             early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, f"{type(base_clf).__name__}", 
-                                                    features_extractor['method'], f"alpha_{alpha}")
+                                                    features_extractor['method'], f"alpha_{alpha0}")
                         else:
                             early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, 
-                                                    f"{type(base_clf).__name__}", f"alpha_{alpha}")
+                                                    f"{type(base_clf).__name__}", f"alpha_{alpha0}")
                     else:
                         early_path = os.path.join(params['SAVEPATH_early_clf'], dataset, "RidgeClassifierCV", 
-                                                  "minirocket", f"alpha_{alpha}")
+                                                  "minirocket", f"alpha_{alpha0}")
 
                     with open(early_path + f"/early_classifier_{trigger}.pkl", "rb") as load_file:
                         early_clf = pkl.load(load_file)
