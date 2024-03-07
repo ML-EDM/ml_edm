@@ -166,7 +166,7 @@ def _fit_early_classifier(X, y, name, chrono_clf, trigger_model, alpha, n_classe
 
     classes, counts = np.unique(y, return_counts=True)
     idx_min_class = classes[counts.argmin()]
-    misclf_cost[:, idx_min_class] *= 10
+    misclf_cost[:, idx_min_class] *= 100
 
     cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, alpha=alpha, 
                                  delay_cost=delay_cost, missclf_cost=misclf_cost)
@@ -334,7 +334,7 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                     misclf_cost = small_values - np.eye(n_classes) * small_values
                     classes, counts = np.unique(y, return_counts=True)
                     idx_min_class = classes[counts.argmin()]
-                    misclf_cost[:, idx_min_class] *= 10
+                    misclf_cost[:, idx_min_class] *= 100
                     
                     early_clf.cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, 
                                                            alpha=alpha, delay_cost=delay_cost, missclf_cost=misclf_cost)
