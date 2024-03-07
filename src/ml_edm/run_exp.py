@@ -330,8 +330,14 @@ def train_for_one_alpha(alpha, params, prefit_cost_unaware=False):
                     def delay_cost(t):
                         inflexion_point = 0
                         return np.exp(((t/data['X_train'].shape[1])-inflexion_point) * np.log(100))
+                    small_values = 1
+                    misclf_cost = small_values - np.eye(n_classes) * small_values
+                    classes, counts = np.unique(y, return_counts=True)
+                    idx_min_class = classes[counts.argmin()]
+                    misclf_cost[:, idx_min_class] *= 10
+                    
                     early_clf.cost_matrices = CostMatrices(chrono_clf.models_input_lengths, n_classes, 
-                                                           alpha=alpha, delay_cost=delay_cost)
+                                                           alpha=alpha, delay_cost=delay_cost, missclf_cost=misclf_cost)
                 else:
                     if features_extractor:
                         if features_paths:
@@ -456,4 +462,4 @@ if __name__ == '__main__':
     #    json.dump(results, res_file, cls=NpEncoder)
     
     #if args.baseline:
-    #    compute_baselines(params['alphas'], params)
+    #s    compute_baselines(params['alphas'], params)
