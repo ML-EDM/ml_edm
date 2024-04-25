@@ -86,8 +86,8 @@ class ProbabilityThreshold(TriggerModel):
         elif self.objective=="hmean":
             # normalize as hmean only takes rates as input 
             acc  = 1 - np.mean([c[0] for c in costs]) / np.max(self.cost_matrices.missclf_cost)
-            earliness = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
-            agg_cost = -hmean((acc, earliness)) # minimize inverse 
+            earliness_gain = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
+            agg_cost = -hmean((acc, earliness_gain)) # minimize inverse 
         else:
             raise ValueError("Unknown objective function, should be one of ['avg_cost', 'hmean']")
 
@@ -608,8 +608,8 @@ class StoppingRule(TriggerModel):
         elif self.objective=="hmean":
             # normalize as hmean only takes rates as input 
             acc  = 1 - np.mean([c[0] for c in costs]) / np.max(self.cost_matrices.missclf_cost)
-            earliness = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
-            agg_cost = -hmean((acc, earliness)) # minimize inverse 
+            earliness_gain = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
+            agg_cost = -hmean((acc, earliness_gain)) # minimize inverse 
         else:
             raise ValueError("Unknown objective function, should be one of ['avg_cost', 'hmean']")
 
@@ -761,10 +761,10 @@ class TEASER(TriggerModel):
             
             if self.objective == 'hmean':
                 acc = (final_pred == y).mean()
-                earliness = 1 - (np.mean(final_t_star) / self.max_length)
+                earliness_gain = 1 - (np.mean(final_t_star) / self.max_length)
                 # minimize inverse of highest hmean
-                if best_obj > -hmean((acc, earliness)):
-                    best_obj = -hmean((acc, earliness))
+                if best_obj > -hmean((acc, earliness_gain)): # add weights here ?
+                    best_obj = -hmean((acc, earliness_gain))
                     self.best_v = v
             else:
                 t_idx = [
@@ -897,8 +897,8 @@ class ECEC(TriggerModel):
         elif self.objective=="hmean":
             # normalize as hmean only takes rates as input 
             acc  = 1 - np.mean([c[0] for c in costs]) / np.max(self.cost_matrices.missclf_cost)
-            earliness = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
-            agg_cost = -hmean((acc, earliness)) # minimize inverse 
+            earliness_gain = 1 - np.mean([c[1] for c in costs]) / np.max(self.cost_matrices.delay_cost)
+            agg_cost = -hmean((acc, earliness_gain)) # minimize inverse 
         else:
             raise ValueError("Unknown objective function, should be one of ['avg_cost', 'hmean']")
 

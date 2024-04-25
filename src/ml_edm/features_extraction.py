@@ -8,7 +8,6 @@ from sklearn.preprocessing import StandardScaler
 from aeon.classification.dictionary_based._weasel_v2 import WEASELTransformerV2
 from aeon.transformations.collection.tsfresh import TSFreshFeatureExtractor
 from aeon.transformations.collection.rocket import MiniRocket
-#from sktime.transformations.panel.rocket import MiniRocket
 
 class Feature_extractor:
 
@@ -48,7 +47,7 @@ class Feature_extractor:
                 self.extractor = self.extractor.transform
         else:
             warn(f"Time series provided are too short for {self.method},"
-                 "no extraction performed")
+                "using timestamps as features")
             self.extractor = self._do_nothing
 
         return self
