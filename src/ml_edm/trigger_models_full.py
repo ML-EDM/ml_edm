@@ -1,9 +1,10 @@
 import numpy as np
 
+from tqdm import tqdm
 from joblib import Parallel, delayed
 from sklearn.neighbors import NearestNeighbors
 
-from trigger_models import TriggerModel
+from ml_edm.trigger_models import TriggerModel
 
 class EDSC(TriggerModel):
 
@@ -242,7 +243,7 @@ class EDSC(TriggerModel):
         print("Computing distances...")
         bmds = Parallel(n_jobs=self.n_jobs) \
             (delayed(self._get_bmd_pair)(X[i], X[j]) 
-             for i in range(len(X)) 
+             for i in tqdm(range(len(X))) 
              for j in range(i+1, len(X)))
         
         for i in range(len(X)):
@@ -335,7 +336,6 @@ class EDSC(TriggerModel):
 
         return all_preds, all_triggers, np.nan_to_num(all_t_star, nan=X.shape[1])
     
-
 class ECTS(TriggerModel):
 
     """
@@ -654,6 +654,7 @@ class ECTS(TriggerModel):
                             if redirect[neighboors_neigboor] == item:
                                 redirect[neighboors_neigboor] = key
                         result.clear()
+                        
             if discriminative == 0:  # No discriminative clusters found
                 break
             discriminative = 0

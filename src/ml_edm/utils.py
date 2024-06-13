@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 import pandas as pd
 
@@ -46,7 +44,7 @@ def check_X_y(X, y,
 
     return X, y
 
-def check_X_probas(X_probas, all_timestamps=False):
+def check_X_probas(X_probas):
 
     # X_probas
     if isinstance(X_probas, list):
@@ -55,15 +53,37 @@ def check_X_probas(X_probas, all_timestamps=False):
         X_probas = X_probas.to_numpy()
     elif not isinstance(X_probas, np.ndarray):
         raise TypeError(
-            "X_probas should be a 2-dimensional list, array or DataFrame of size (N, P) with N the number "
-            "of examples and P the number of classes probabilities.")
+            "X_probas should be a 2-dimensional list, array or DataFrame of size (N, K) with N the number "
+            "of examples and K the number of classes probabilities.")
     
     if X_probas.ndim != 2:
         raise ValueError(
-            "X_pred should be a 2-dimensional list, array or DataFrame of size (N, P) with N the number "
-            "of examples and P the number of classes probabilities.")
+            "X_probas should be a 2-dimensional list, array or DataFrame of size (N, K) with N the number "
+            "of examples and K the number of classes probabilities.")
     
     if len(X_probas) == 0:
         raise ValueError("Dataset 'X_probas' to predict triggering on is empty.")
 
     return X_probas
+
+def check_X_past_probas(X_past_probas):
+
+    # X_probas
+    if isinstance(X_past_probas, list):
+        X_past_probas = np.array(X_past_probas)
+    elif isinstance(X_past_probas, pd.DataFrame):
+        X_past_probas = X_past_probas.to_numpy()
+    elif not isinstance(X_past_probas, np.ndarray):
+        raise TypeError(
+            "X_past_probas should be a 3-dimensional list, array or DataFrame of size (T, N, K) with T the number of timepoints,"
+            "N the number of examples and K the number of classes probabilities.")
+    
+    if X_past_probas.ndim != 3:
+        raise ValueError(
+            "X_past_probas should be a 3-dimensional list, array or DataFrame of size (T, N, K) with T the number of timepoints,"
+            " N the number of examples and K the number of classes probabilities.")
+    
+    if X_past_probas.shape[1] == 0:
+        raise ValueError("Dataset 'X_past_probas' to predict triggering on is empty.")
+
+    return X_past_probas

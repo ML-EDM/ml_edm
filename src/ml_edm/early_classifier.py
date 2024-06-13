@@ -5,12 +5,12 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import cohen_kappa_score
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from chrono_classifier import ChronologicalClassifiers
-from deep.deep_classifiers import DeepChronologicalClassifier
-from cost_matrice import CostMatrices
-from trigger_models import *
-from trigger_models_full import *
-from utils import check_X_y
+from ml_edm.classification.chrono_classifier import ClassifiersCollection
+from ml_edm.deep.deep_classifiers import DeepChronologicalClassifier
+from ml_edm.cost_matrice import CostMatrices
+from ml_edm.trigger_models import *
+from ml_edm.trigger_models_full import *
+from ml_edm.utils import check_X_y
 
 # from ects_demokritos import ECTS
 
@@ -74,7 +74,7 @@ class EarlyClassifier:
     # chronological classifiers and trigger models arguments.
     @property
     def models_input_lengths(self):
-        return self.chronological_classifiers.models_input_lengths
+        return self.chronological_classifiers.timestamps
     
     @property
     def nb_classifiers(self):
@@ -167,12 +167,12 @@ class EarlyClassifier:
         
         # FIT CLASSIFIERS
         if self.chronological_classifiers is not None:
-            if not isinstance(self.chronological_classifiers, ChronologicalClassifiers) and \
+            if not isinstance(self.chronological_classifiers, ClassifiersCollection) and \
                 not isinstance(self.chronological_classifiers, DeepChronologicalClassifier):
                 raise ValueError(
                     "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
         else:
-            self.chronological_classifiers = ChronologicalClassifiers(
+            self.chronological_classifiers = ClassifiersCollection(
                 base_classifier=HistGradientBoostingClassifier(),
                 learned_timestamps_ratio=0.05,
                 min_length=1
@@ -185,8 +185,8 @@ class EarlyClassifier:
         if not self.cost_matrices:
             self.cost_matrices = CostMatrices(timestamps=self.models_input_lengths, 
                                               n_classes=len(np.unique(y)), 
-                                              alpha=1.)
-            warn("No cost matrices defined, using alpha = 1 by default")
+                                              alpha=0.5)
+            warn("No cost matrices defined, using alpha = 0.5 by default")
 
         if self.trigger_model is not None:
             if self.trigger_model == "economy":

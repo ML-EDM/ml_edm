@@ -1,9 +1,40 @@
 import numpy as np
-
 from numbers import Number
 from warnings import warn 
 
 class CostMatrices:
+    """
+    Object defining the cost values for each type of error 
+    for each desired timestamps
+
+    Parameters
+    ----------
+    timestamps : array-like of shape (n_timestamps,)
+        Input timestamps, one matrix will be instanciated 
+        for each of the imput timesstamps.
+    
+    n_classes : int
+        Number of classes ; each of the matrix within the
+        object will have the shape (n_classes, n_classes).
+    
+    all_matrices : array-like of shape (n_timestamps, n_classes, n_classes), \
+            default=None
+        Option to manually defined all cost matrices. 
+    
+    missclf_cost : array-like of shape (n_classes, n_classes), int or float, \
+            default=1
+        Cost to be paid when making a wrong prediction.
+        If int or float the cost is the same for all type
+        of errors. For asymetric costs define an array-like.
+         
+        Note that misclassification cost cannot be time-dependant for now.
+
+    delay_cost : array-like of shape (n_timestamps,) or callable function of timestamps, \
+            default=None
+        Cost to be paid for waiting new measurements.
+        If callable function should be only take one argument, i.e. timestamp t.
+
+    """
 
     def __init__(self,
                  timestamps,
@@ -60,12 +91,3 @@ class CostMatrices:
 
     def __len__(self):
         return len(self.values)
-
-"""
-import random
-def my_func(t):
-    return t/24
-rnd = [np.random.rand(2,2) for _ in range(24)]
-a = CostMatrices(n_classes=2, timestamps=np.arange(1,25))
-print(a[0])
-"""

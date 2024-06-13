@@ -1,5 +1,6 @@
 import copy
 import random
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -17,7 +18,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import GridSearchCV, RepeatedStratifiedKFold
 
-from utils import check_X_probas
+from ml_edm.cost_matrice import CostMatrices
+from ml_edm.utils import *
 
 np.seterr(divide='ignore', invalid='ignore')
 
@@ -28,20 +30,78 @@ KNOWN_AGGREGATIONS = {"max": np.max, "gini": gini}
 
 class TriggerModel(ABC):
 
-    def __init__(self):
+    def __init__(self, timepoints):
+
         self.require_past_probas = False
         self.require_classifiers = True
         self.alter_classifiers = False
 
+        #self.cost_matrices = cost_matrices
+        self.timepoints = timepoints
+    
+
+    def fit(self, X, X_probas, y, cost_matrices=None):
+        
+        X, y = check_X_y(X, y)
+        X_probas = check_X_past_probas(X_probas)
+
+        self.classes_ = np.unique(y)
+
+        self.cost_matrices = cost_matrices
+        if self.cost_matrices is None:
+            self.cost_matrices = CostMatrices(
+                timestamps=self.timepoints, 
+                n_classes=len(np.unique(y)), 
+                alpha=0.5
+            )
+            warn("No cost matrices defined, using alpha = 0.5 by default")
+
+        self._fit(X, X_probas, y)
+
+        return self
+
+    def predict(self, X, X_probas, cost_matrices=None):
+        
+        ## get timepoints from series in X 
+        ## closer to the self.timepoits defined
+        X_probas = check_X_probas(X_probas)
+
+        # warning cost matrices test not the same as in self.cost_matrices !
+        if cost_matrices:
+            if not isinstance(cost_matrices, CostMatrices):
+                raise ValueError("cost_matrices should an object of CostMatrices class")
+            
+            if not np.equal(self.cost_matrices.values, cost_matrices.values):
+                warn("Different cost matrices between training and predicting"
+                     "Performances may be hurted. ")
+
+        X_timestamps = []
+        for ts in X:
+            diff = self.timepoints - len(ts)
+            if 0 not in diff:
+                truncated = True
+                if (diff > 0).all(): # if ts smaller than all considered lengths
+                    X_timestamps.append(0)
+                else:
+                    # replace bigger length by -inf and get smallest diff
+                    time_idx = np.where(diff < 0, diff, -np.inf).argmax()
+                    X_timestamps.append(self.timepoints[time_idx])
+            else:
+                # replace all non matching lengths by -inf and get index
+                time_idx = np.where(diff == 0, diff, -np.inf).argmax()
+                X_timestamps.append(self.timepoints[time_idx])
+
+        return self._predict(X_probas, X_timestamps)
+    
     @abstractmethod
-    def fit(self, X, y):
+    def _fit(self, X, y):
         """Fit the trigger model according to probas 
         outputed by classifiers (or not)
 
         """
-    
+
     @abstractmethod
-    def predict(self, X):
+    def _predict(self, X, X_timestamps):
         """Predict whether or not time to make
         decision is safe or not 
 
@@ -49,17 +109,26 @@ class TriggerModel(ABC):
 
 
 class ProbabilityThreshold(TriggerModel):
+    """
+    Probability threshold trigger model
+
+    Trigger model based on some confidence threshold. The likeliest 
+    prediction has to be to above the threshod to accept the decision.
+
+    Parameters
+    ----------
+
+    timepoints : 
+    """
 
     def __init__(self,
-                cost_matrices,
-                models_input_lengths,
+                timepoints,
                 objective="avg_cost",
                 manual_threshold=None,
                 n_jobs=1):
         
         super().__init__()
-        self.cost_matrices = cost_matrices
-        self.models_input_lengths = models_input_lengths
+        self.timepoints = timepoints
         self.objective = objective
 
         if manual_threshold is not None:
@@ -71,10 +140,10 @@ class ProbabilityThreshold(TriggerModel):
         
         costs = []
         for i, probas in enumerate(X_probas):
-            for j in range(len(self.models_input_lengths)):
+            for j in range(len(self.timepoints)):
                 trigger = (np.max(probas[j]) >= threshold)
 
-                if trigger or j==len(self.models_input_lengths)-1:
+                if trigger or j==len(self.timepoints)-1:
                     pred = np.argmax(probas[j])
                     c = self.cost_matrices[j][pred][y[i]] if self.objective=="avg_cost" \
                             else (self.cost_matrices.missclf_cost[j][pred][y[i]], self.cost_matrices.delay_cost[j][pred][y[i]])
@@ -93,7 +162,7 @@ class ProbabilityThreshold(TriggerModel):
 
         return agg_cost
         
-    def fit(self, X, X_probas, y, classes_=None):
+    def _fit(self, X_probas, y):
         
         if hasattr(self, 'opt_threshold'):
             return self
@@ -108,8 +177,8 @@ class ProbabilityThreshold(TriggerModel):
 
         return self 
 
-    def predict(self, X, X_probas):
-        
+    def _predict(self, X_probas, X_timestamp):
+
         triggers = []
         for p in X_probas:
             triggers.append(
@@ -505,11 +574,11 @@ class EconomyGamma(TriggerModel):
         for ts in X:
             diff = self.models_input_lengths - len(ts)
             if 0 not in diff:
-                if (diff > 0).sum() == len(diff):
+                if (diff > 0).all():
                     timestamps.append(0)
                     continue
                 else:
-                    time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                    time_idx = np.where(diff < 0, diff, -np.inf).argmax()
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
             timestamps.append(self.models_input_lengths[time_idx])
@@ -636,7 +705,7 @@ class StoppingRule(TriggerModel):
             diff = self.models_input_lengths - len(ts)
             if 0 not in diff:
                 truncated = True
-                time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                time_idx = np.where(diff < 0, diff, -np.inf).argmax()
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
             timestamps.append(self.models_input_lengths[time_idx])
@@ -1110,10 +1179,10 @@ class ECDIRE(TriggerModel):
             diff = self.models_input_lengths - len(ts)
             if 0 not in diff:
                 truncated = True
-                if (diff > 0).sum() == len(diff):
+                if (diff > 0).all():
                     timestamps.append(0)
                 else:
-                    time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                    time_idx = np.where(diff < 0, diff, -np.inf).argmax()
                     timestamps.append(self.models_input_lengths[time_idx])
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
@@ -1147,12 +1216,10 @@ class CALIMERA(TriggerModel):
     Inspired by : https://github.com/JakubBilski/CALIMERA 
     """
     def __init__(self,
-                 cost_matrices,
                  models_input_lengths,
                  n_jobs=1):
         
-        super().__init__()
-        self.cost_matrices = cost_matrices
+        super().__init__(models_input_lengths)
         self.models_input_lengths = models_input_lengths
 
         self.n_jobs = n_jobs
@@ -1169,15 +1236,21 @@ class CALIMERA(TriggerModel):
         #delay_cost = self.alpha * self.models_input_lengths[time_idx] / self.max_length
         #costs = 1 - max_probas + delay_cost
         
-        proba_correct = np.mean(np.diagonal(self.cost_matrices[time_idx])) * max_probas
+        delay = np.mean(self.cost_matrices.delay_cost[time_idx])
+        proba_correct = np.mean(np.diagonal(self.cost_matrices.missclf_cost[time_idx])) * max_probas # weight Cd by prob ?
         non_diag = self.cost_matrices[time_idx] - \
             (np.eye(self.n_classes) * np.diagonal(self.cost_matrices[time_idx]))
-        proba_incorrect = np.sum(non_diag) / (self.n_classes**2 - self.n_classes) * (1-max_probas)
-        costs = proba_correct + proba_incorrect
+        proba_incorrect = np.sum(non_diag) / (self.n_classes**2 - self.n_classes) * (1-max_probas) # weight Cm one by one ?
+        costs = proba_correct + proba_incorrect + delay 
+
+        delay = np.mean(self.cost_matrices.delay_cost[time_idx])
+        misclf_cost = [(prob * [self.cost_matrices.missclf_cost[time_idx][prob.argmax()][yy]
+                               for yy in self.classes_]).sum() for prob in probas]
+        costs = misclf_cost + delay
 
         return features, costs
     
-    def fit(self, X, X_probas, y, classes_=None):
+    def _fit(self, X, X_probas, y):
 
         self.max_length = X.shape[1]
         self.max_timestamp = len(self.models_input_lengths)
@@ -1205,8 +1278,8 @@ class CALIMERA(TriggerModel):
 
         return self 
     
-    def predict(self, X, X_probas):
-
+    def _predict(self, X_probas, X_timestamps):
+        """
         timestamps = []
         for ts in X:
             diff = self.models_input_lengths - len(ts)
@@ -1215,23 +1288,23 @@ class CALIMERA(TriggerModel):
                     timestamps.append(0)
                     continue
                 else:
-                    time_idx = np.where(diff > 0, diff, -np.inf).argmax()
+                    time_idx = np.where(diff < 0, diff, -np.inf).argmax()
             else:
                 time_idx = np.where(diff == 0, diff, -np.inf).argmax()
             timestamps.append(self.models_input_lengths[time_idx])
-
+        """
         triggers, costs = [], []
         for i, probas in enumerate(X_probas):
             trigger = False
             # if last timestamp is reached
-            if timestamps[i] == self.models_input_lengths[-1]:
+            if X_timestamps[i] == self.models_input_lengths[-1]:
                 triggers.append(True)
                 costs.append(np.nan)
                 continue
 
-            time_idx = np.where(timestamps[i] == self.models_input_lengths)[0][0]
+            time_idx = np.where(X_timestamps[i] == self.models_input_lengths)[0][0]
             X_trigger, _ = self._generate_features(probas[None,:], time_idx, 
-                                                   np.zeros(X.shape[0], dtype=int))
+                                                   np.zeros(X_probas.shape[0], dtype=int))
             
             predicted_cost_diff = self.halters[time_idx].predict(X_trigger)
 
