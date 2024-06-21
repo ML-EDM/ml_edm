@@ -1,9 +1,10 @@
 import numpy as np
 import pandas as pd
 
+from sklearn.utils.multiclass import check_classification_targets
+from warnings import warn 
 
-def check_X_y(X, y, 
-              equal_length=True):
+def check_X_y(X, y, equal_length=True):
 
     # Check X and y
     if isinstance(X, list):
@@ -41,6 +42,8 @@ def check_X_y(X, y,
         
         if len(y) != len(X):
             raise ValueError("y should be a list of classes of size N with N the number of examples in X")
+        
+        check_classification_targets(y)
 
     return X, y
 
@@ -87,3 +90,27 @@ def check_X_past_probas(X_past_probas):
         raise ValueError("Dataset 'X_past_probas' to predict triggering on is empty.")
 
     return X_past_probas
+
+def check_timestamps(timestamps):
+
+    if isinstance(timestamps, list):
+        timestamps = np.array(timestamps)
+    elif not isinstance(timestamps, np.ndarray):
+        raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
+    if len(timestamps) == 0:
+            raise ValueError("List argument 'timestamps' is empty.")
+    for t in timestamps:
+        if not (isinstance(t, np.int32) or isinstance(t, np.int64)):
+            raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
+        if t < 0:
+            raise ValueError("Argument 'timestamps' should be a list or array of positive int.")
+                
+    if len(np.unique(timestamps)) != len(timestamps):
+        timestamps = np.unique(timestamps)
+        warn("Removed duplicates in argument 'timestamps'.")
+    
+    if 0 in timestamps:
+        timestamps = np.nonzero(timestamps)[0]
+        warn("Removed 0 from 'timestamps', first valid timestamps is usually 1.")
+
+    return timestamps

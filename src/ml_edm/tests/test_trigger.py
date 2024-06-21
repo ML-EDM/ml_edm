@@ -7,9 +7,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.linear_model import RidgeClassifierCV
 
-from ml_edm.cost_matrice import CostMatrices
+from ml_edm.cost_matrices import CostMatrices
 from ml_edm.classification.chrono_classifier import ClassifiersCollection
-from ml_edm.trigger_models import CALIMERA
+from ml_edm.trigger import CALIMERA
 
 
 def load_ts(n_classes):

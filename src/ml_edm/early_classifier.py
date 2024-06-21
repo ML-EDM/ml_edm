@@ -1,21 +1,24 @@
 import copy
 import numpy as np
+from scipy.stats import hmean
+from warnings import warn
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import cohen_kappa_score
+from sklearn.base import BaseEstimator
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from ml_edm.classification.chrono_classifier import ClassifiersCollection
-from ml_edm.deep.deep_classifiers import DeepChronologicalClassifier
-from ml_edm.cost_matrice import CostMatrices
-from ml_edm.trigger_models import *
-from ml_edm.trigger_models_full import *
-from ml_edm.utils import check_X_y
+from .classification.chrono_classifier import ClassifiersCollection
+from .deep.deep_classifiers import DeepChronologicalClassifier
+from .cost_matrices import CostMatrices
+
+from .trigger._base import BaseTriggerModel
+from .trigger import *
+from .utils import check_X_y
 
 # from ects_demokritos import ECTS
 
-
-class EarlyClassifier:
+class EarlyClassifier(BaseEstimator):
     """
     Objects that can predict the class of an incomplete time series as well as the best time to trigger the decision as
     a time series is revealed to allow for early classification tasks.
@@ -55,26 +58,26 @@ class EarlyClassifier:
     """
     def __init__(self,
                  chronological_classifiers=None,
-                 prefit_classifiers=False, 
                  trigger_model=None,
-                 trigger_params={},
                  cost_matrices=None,
+                 trigger_proportion=0.4,
+                 prefit_classifiers=False, 
                  random_state=44):
         
         self.cost_matrices = cost_matrices
         self.chronological_classifiers = copy.deepcopy(chronological_classifiers)
-        self.prefit = prefit_classifiers
+        self.prefit_classifiers = prefit_classifiers
 
         self.trigger_model = trigger_model
-        self.trigger_params = trigger_params
+        self.trigger_proportion = trigger_proportion
 
         self.random_state = random_state
 
     # Properties are used to give direct access to the 
     # chronological classifiers and trigger models arguments.
     @property
-    def models_input_lengths(self):
-        return self.chronological_classifiers.timestamps
+    def timestamps(self):
+        return self.cost_matrices.timestamps
     
     @property
     def nb_classifiers(self):
@@ -109,28 +112,8 @@ class EarlyClassifier:
     def min_length(self, value):
         self.min_length = value
 
-    def get_params(self):
-        return {
-            "classifiers": self.chronological_classifiers.classifiers,
-            "models_input_lengths": self.chronological_classifiers.models_input_lengths,
-            "base_classifier": self.chronological_classifiers.base_classifier,
-            "nb_classifiers": self.chronological_classifiers.nb_classifiers,
-            "sampling_ratio": self.chronological_classifiers.sampling_ratio,
-            "cost_matrices": self.trigger_model.cost_matrices,
-            "aggregation_function": self.trigger_model.aggregation_function,
-            "thresholds": self.trigger_model.thresholds,
-            "transition_matrices": self.trigger_model.transition_matrices,
-            "confusion_matrices": self.trigger_model.confusion_matrices,
-            "feature_extraction": self.chronological_classifiers.feature_extraction,
-            "class_prior": self.chronological_classifiers.class_prior,
-            "max_length": self.chronological_classifiers.max_length,
-            "classes_": self.chronological_classifiers.classes_,
-            "multiclass": self.trigger_model.multiclass,
-            "initial_cost": self.trigger_model.initial_cost,
-        }
-
     def _fit_classifiers(self, X, y):
-        self.chronological_classifiers.fit(X, y)
+        self.chronological_classifiers.fit(X, y, self.cost_matrices)
         return self
 
     def _fit_trigger_model(self, X, y):
@@ -138,28 +121,32 @@ class EarlyClassifier:
         #                   for length in self.chronological_classifiers.models_input_lengths], axis=1)
         
         if self.trigger_model.require_classifiers:
-            X_probas = np.stack(self.chronological_classifiers.predict_past_proba(X))
-            self.trigger_model.fit(X, X_probas, y)
+            X_probas = np.stack(self.chronological_classifiers.predict_past_proba(X, self.cost_matrices))
+            self.trigger_model.fit(X, X_probas, y, self.cost_matrices)
         else:
-            self.trigger_model.fit(X, y)
+            self.trigger_model.fit(X, None, y, self.cost_matrices)
 
-    def fit(self, X, y, trigger_proportion=0.3):
+    def fit(self, X, y):
         """
-        Parameters:
-            X: np.ndarray
-                Training set of matrix shape (N, T) where:
-                N is the number of time series
-                T is the commune length of all complete time series
-            y: nd.ndarray
-                List of the N corresponding labels of the training set.
-            val_proportion: float
-                Value between 0 and 1 representing the proportion of data to be used by the trigger_model for training.
+        Fit the early classifier to given training data.
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_timestamps)
+            The input samples.
+        y : ndarray
+            Target labels relative to X.
+
+        Returns
+        -------
+        self : `EarlyClassifier`
+            Fitted Estimator
         """
 
         # DEFINE THE SEPARATION INDEX FOR VALIDATION DATA
-        if trigger_proportion != 0:
+        if self.trigger_proportion != 0 and not self.prefit_classifiers:
             X_clf, X_trigger, y_clf, y_trigger = train_test_split(
-                X, y, test_size=trigger_proportion, random_state=self.random_state
+                X, y, test_size=self.trigger_proportion, random_state=self.random_state
             )
         else:
             X_clf = X_trigger = X
@@ -172,49 +159,31 @@ class EarlyClassifier:
                 raise ValueError(
                     "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
         else:
-            self.chronological_classifiers = ClassifiersCollection(
-                base_classifier=HistGradientBoostingClassifier(),
-                learned_timestamps_ratio=0.05,
-                min_length=1
-            )
+            if self.trigger_model.require_classifiers:
+                self.chronological_classifiers = ClassifiersCollection(
+                    base_classifier=HistGradientBoostingClassifier(),
+                    learned_timestamps_ratio=0.05,
+                    min_length=1
+                )
             #self.chronological_classifiers = DeepChronologicalClassifier()
-        if not self.prefit:
-            self._fit_classifiers(X_clf, y_clf)
 
-        # FIT TRIGGER MODEL
         if not self.cost_matrices:
-            self.cost_matrices = CostMatrices(timestamps=self.models_input_lengths, 
+            self.cost_matrices = CostMatrices(timestamps=self.timestamps, 
                                               n_classes=len(np.unique(y)), 
                                               alpha=0.5)
             warn("No cost matrices defined, using alpha = 0.5 by default")
 
+        if not self.prefit_classifiers:
+            self._fit_classifiers(X_clf, y_clf)
+
+        # FIT TRIGGER MODEL
         if self.trigger_model is not None:
-            if self.trigger_model == "economy":
-                self.trigger_model = EconomyGamma(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
-            elif self.trigger_model == "proba_threshold":
-                self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
-            elif self.trigger_model == "stopping_rule":
-                self.trigger_model = StoppingRule(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
-            elif self.trigger_model == "teaser":
-                self.trigger_model = TEASER(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
-            elif self.trigger_model == "ecec":
-                self.trigger_model = ECEC(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
-            elif self.trigger_model == "ecdire":
-                self.trigger_model = ECDIRE(self.chronological_classifiers, **self.trigger_params)
-            elif self.trigger_model == "edsc":
-                self.trigger_model = EDSC(min_length=5, max_length=self.chronological_classifiers.max_length//2, **self.trigger_params)
-            elif self.trigger_model == "ects":
-                self.trigger_model = ECTS(self.models_input_lengths, **self.trigger_params)
-            elif self.trigger_model == "calimera":
-                self.trigger_model = CALIMERA(self.cost_matrices, self.models_input_lengths, **self.trigger_params) 
-            elif self.trigger_model == "elects":
-                self.trigger_model = self.chronological_classifiers # embed trigger model  
-            else:
-                raise ValueError("Unknown trigger model")
+                if not isinstance(self.trigger_model, BaseTriggerModel):
+                     raise ValueError(
+                          "Argument `trigger_model` shloud inherits from the `BaseTriggerModel` class.")
         else:
-            self.trigger_model = ProbabilityThreshold(self.cost_matrices, self.models_input_lengths, **self.trigger_params)
-            warn("No trigger model given, using base probability"
-                 "threshold grid-search by default")
+            warn("No `trigger_model` defined, setting default trigger to Proba_Threshold.")
+            self.trigger_model = ProbabilityThreshold(self.timestamps)
 
         self._fit_trigger_model(X_trigger, y_trigger)
 
@@ -224,53 +193,50 @@ class EarlyClassifier:
 
         return self
 
+    def predict_proba(self, X):
+        return self.chronological_classifiers.predict_proba(X, self.cost_matrices)
+
     def predict(self, X):
         """
         Predicts the class, class probabilities vectors, trigger indication and expected costs of the time series
         contained in X.
-        Parameters:
-            X: np.ndarray
-                Dataset of time series of various sizes to predict. An array of size (N*max_T) where N is the number of
-                time series, max_T the max number of measurements in a time series and where empty values are filled
-                with nan. Can also be a pandas DataFrame or a list of lists.
-        Returns:
-            classes: np.ndarray:
-                Array containing the predicted class of each time series in X.
-            probas: np.ndarray
-                Array containing the predicted class probabilities vectors of each time series in X.
-            triggers: np.ndarray
-                Array of booleans indicating whether to trigger the decision immediately with the current prediction
-                (True) or to wait for more data (False) for each time series in X.
-            costs: np.ndarray
-                Array of arrays containing the expected costs of waiting longer for each next considered measurement for
-                each time series in X. Using argmin on each row outputs the number of timestamps to wait for until the
-                next expected trigger indication.
-        """
 
-        # Validate X format
-        X, _ = check_X_y(X, None, equal_length=False)
+        Parameters
+        ----------
+        X: array-like 
+            The input time series, potentially of various size.
+
+        Returns
+        -------
+        classes : ndarray
+            Array containing the predicted class of each time series in X.
+        probas: np.ndarray
+            Array containing the predicted class probabilities vectors of each time series in X.
+        triggers: np.ndarray
+            Array of booleans indicating whether to trigger the decision immediately with the current prediction
+            (True) or to wait for more data (False) for each time series in X.
+        """
 
         chrono_clf = self.chronological_classifiers
         if self.trigger_model.alter_classifiers:
             chrono_clf = self.new_chronological_classifiers
 
-        # Predict
         if self.trigger_model.require_classifiers:
             #classes = self.chronological_classifiers.predict(X)  
-            probas = chrono_clf.predict_proba(X)
+            probas = chrono_clf.predict_proba(X, self.cost_matrices)
             classes = probas.argmax(axis=-1)
 
             if self.trigger_model.require_past_probas:
-                past_probas = chrono_clf.predict_past_proba(X)
-                triggers, costs = self.trigger_model.predict(X, past_probas)
+                past_probas = chrono_clf.predict_past_proba(X, self.cost_matrices)
+                triggers = self.trigger_model.predict(X, past_probas, self.cost_matrices)
             else:
-                triggers, costs = self.trigger_model.predict(X, probas)
+                triggers = self.trigger_model.predict(X, probas, self.cost_matrices)
 
         else:
-            classes, triggers, _ = self.trigger_model.predict(X)
-            probas, costs = None, None
+            classes, triggers, _ = self.trigger_model.predict(X, None, self.cost_matrices)
+            probas = None
 
-        return classes, probas, triggers, costs
+        return classes, probas, triggers
 
     def score(self, X, y, return_metrics=False):
 
@@ -286,25 +252,26 @@ class EarlyClassifier:
                 self.chronological_classifiers.predict_past_proba(X)
             )
 
-        for t, l in enumerate(self.models_input_lengths):
+        for t, l in enumerate(self.timestamps):
 
             if not self.trigger_model.require_classifiers:
-                classes, triggers, all_t_star = self.trigger_model.predict(X)
-                def_preds = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
+                classes, triggers, all_t_star = self.trigger_model.predict(X, None, self.cost_matrices)
+                def_preds = np.unique(y)[np.argmax(self.trigger_model.class_prior)]
                 all_preds = np.nan_to_num(classes, nan=def_preds)
                 all_t_star = np.array(
-                    [self.models_input_lengths[np.searchsorted(self.models_input_lengths, val, side='left')] for val in all_t_star]
+                    [self.timestamps[np.searchsorted(self.timestamps, val, side='left')] for val in all_t_star]
                 )
 
-                all_f_star = np.array([self.cost_matrices[np.where(self.models_input_lengths==t)[0][0]][int(all_preds[i])][y[i]] 
+                all_f_star = np.array([self.cost_matrices[np.where(self.timestamps==t)[0][0]][int(all_preds[i])][y[i]] 
                                        for i, t in enumerate(all_t_star)])
                 break
+
             elif self.trigger_model.require_past_probas: # not call the predict to avoid recomputing all past probas T times
                 probas_tmp = all_probas[:, :t+1, :]
                 classes = probas_tmp.argmax(axis=-1)[:, -1]
-                triggers = self.trigger_model.predict(X[:, :l], probas_tmp)[0]
+                triggers = self.trigger_model.predict(X[:, :l], probas_tmp, self.cost_matrices)
             else:
-                classes, _, triggers, _ = self.predict(X[:, :l])
+                classes, _, triggers = self.predict(X[:, :l])
             
             trigger_mask = triggers
             # already made predictions
@@ -323,7 +290,7 @@ class EarlyClassifier:
             if past_trigger.sum() == X.shape[0]:
                 break
 
-            if l == self.chronological_classifiers.models_input_lengths[-1]:
+            if l == self.chronological_classifiers.timestamps[-1]:
                 all_t_star[np.where(all_t_star < 0)] = l
                 # final prediction is the valid prediction
                 all_preds[np.where(all_preds < 0)] = classes[np.where(all_preds < 0)]
@@ -361,11 +328,11 @@ class EarlyClassifier:
             raise ValueError("Unable to estimate probabilities for trigger models"
                              "that doesn't rely on probabilistic classifiers")
 
-        all_f = np.zeros((len(self.models_input_lengths), len(y)))
-        all_preds = np.zeros((len(self.models_input_lengths), len(y)))
+        all_f = np.zeros((len(self.timestamps), len(y)))
+        all_preds = np.zeros((len(self.timestamps), len(y)))
 
-        for t, l in enumerate(self.models_input_lengths):
-            probas = self.chronological_classifiers.predict_proba(X[:, :l])
+        for t, l in enumerate(self.timestamps):
+            probas = self.chronological_classifiers.predict_proba(X[:, :l], self.cost_matrices)
             classes = np.argmax(probas, axis=-1)
             all_preds[t] = classes
             if use_probas:
@@ -373,7 +340,7 @@ class EarlyClassifier:
                     [self.cost_matrices[t][:][y[i]] * probas[i] for i in range(len(y))]
                 ).sum(axis=-1)
             else:
-                if l == self.models_input_lengths[-1]:
+                if l == self.timestamps[-1]:
                     default_pred = np.unique(y)[np.argmax(self.chronological_classifiers.class_prior)]
                     all_f[t] = [self.cost_matrices[t][int(p)][y[i]] 
                                 if not np.isnan(p) else self.cost_matrices[t][default_pred][y[i]] 
@@ -384,7 +351,7 @@ class EarlyClassifier:
                                 for i, p in enumerate(classes)]
         
         t_post_idx = all_f.argmin(axis=0)
-        all_t_post = [self.models_input_lengths[idx]
+        all_t_post = [self.timestamps[idx]
                       for idx in t_post_idx]
         
         all_f_post = [f[t_post_idx[i]] for i, f in enumerate(all_f.T)]

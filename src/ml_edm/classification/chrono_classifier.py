@@ -8,10 +8,9 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
 
-from ml_edm.features_extraction import Feature_extractor
-from ml_edm.trigger_models import *
-from ml_edm.trigger_models_full import *
-from ml_edm.utils import *
+from .features_engineering.features_extraction import Feature_extractor
+from ..trigger import *
+from ..utils import *
 
 from warnings import warn
 
@@ -31,27 +30,30 @@ class ClassifiersCollection(BaseTimeClassifier):
     trigger model object such as an EconomyGamma instance to do tasks of early classification.
 
     Parameters:
-        base_classifier: classifier instance, default=sklearn.ensemble.HistGradientBoostingClassifier()
+    -----------
+
+        base_classifier : classifier instance, default=sklearn.ensemble.HistGradientBoostingClassifier()
             Classifier instance to be cloned and trained for each input length.
-        timestamps: numpy.ndarray, default=None
+        timestamps : numpy.ndarray, default=None
             Array containing the numbers of time measurements/input length that each classifier is trained on.
             Argument 'nb_classifiers' is deduced from the length of this list.
-        sampling_ration: float, default = None
+        sampling_ratio : float, default = None
             Ignored if 'timestamps' is defined.
             Foat number between 0 and 1, define frequency at which 'timestamps' are spaced.
-        min_length: int, default = None
+        min_length : int, default = None
             Define the minimum serie length for the first classifier to operate on.
-        feature_extraction: dict, default = None 
+        feature_extraction : dict, default = None 
             Either a dictionnary containg one of method ['minirocket', 'weasel2.0', 'tsfresh'] and eventually a 'params'
             to define method parametes as a dict and a 'path' key to define where to save features matrices if desired.
-        calibration: boolean, default = True
+        calibration : boolean, default = True
             Whether or not to use post-hoc calibration (Platt scaling) for each classifier.
-        classifiers: numpy.ndarray, default=None
+        classifiers : numpy.ndarray, default=None
             List or array containing the classifier instances to be trained. Argument 'nb_classifiers' is deduced from
             the length of this list.
-        
 
     Attributes:
+    -----------
+
         nb_classifiers: int, default=20
             Number of classifiers to be trained. If the number is inferior to the number of measures in the training
             time series, the models input lengths will be equally spaced from max_length/n_classifiers to max_length.
@@ -77,8 +79,8 @@ class ClassifiersCollection(BaseTimeClassifier):
                  random_state=44):  
         
         super().__init__(timestamps, 
-                       sampling_ratio, 
-                       min_length)
+                         sampling_ratio,
+                         min_length)
         
         self.base_classifier = base_classifier
         self.classifiers = classifiers
@@ -124,15 +126,16 @@ class ClassifiersCollection(BaseTimeClassifier):
             self.classifiers = [copy.deepcopy(self.base_classifier) for _ in range(self.nb_classifiers)]
 
         # feature_extraction check
-        if isinstance(self.feature_extraction, dict) and \
-            'method' in self.feature_extraction.keys():
-            
-            if self.feature_extraction['method'] not in ['minirocket', 'weasel2.0', 'tsfresh']:
-                raise ValueError("Argument 'method' from 'feature_extraction' should be one of "
-                                 "['minirocket', 'weasel2.0', 'tsfresh']")
-        elif not isinstance(self.feature_extraction, str):
-            raise ValueError("Argument 'feature_extraction' should be one of dictionary"
-                             "or string (path from which to retreive already computed features)")
+        if self.feature_extraction:
+            if isinstance(self.feature_extraction, dict) and \
+                'method' in self.feature_extraction.keys():
+                
+                if self.feature_extraction['method'] not in ['minirocket', 'weasel2.0', 'tsfresh']:
+                    raise ValueError("Argument 'method' from 'feature_extraction' should be one of "
+                                    "['minirocket', 'weasel2.0', 'tsfresh']")
+            elif not isinstance(self.feature_extraction, str):
+                raise ValueError("Argument 'feature_extraction' should be one of dictionnary "
+                                "or string (path from which to retreive already computed features)")
 
         # FEATURE EXTRACTION AND FITTING
         self.extractors = []
@@ -152,7 +155,7 @@ class ClassifiersCollection(BaseTimeClassifier):
                 #Xt_clf, _, y_clf, _ = train_test_split(Xt.reshape(len(X),-1), y, test_size=0.3, stratify=y,
                 #                                       random_state=self.random_state) # throw calib samples
 
-            self.classifiers[i].fit(Xt_clf, y_clf, *args, **kwargs)
+            self.classifiers[i].fit(Xt_clf, y_clf, **kwargs)
             
             if self.calibration:
                 calib_clf = CalibratedClassifierCV(self.classifiers[i], cv='prefit')

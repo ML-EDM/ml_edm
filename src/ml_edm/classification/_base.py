@@ -1,8 +1,8 @@
 from abc import ABCMeta, abstractmethod
 from sklearn.base import BaseEstimator, ClassifierMixin
-from ml_edm.utils import *
 from warnings import warn
 
+from ..utils import *
 
 class BaseTimeClassifier(ClassifierMixin, BaseEstimator, metaclass=ABCMeta):
 
@@ -41,22 +41,9 @@ class BaseTimeClassifier(ClassifierMixin, BaseEstimator, metaclass=ABCMeta):
 
         # check timestamps parameters validity as well as sampling ratio
         if self.timestamps is not None:
-            if isinstance(self.timestamps, list):
-                self.timestamps = np.array(self.timestamps)
-            elif not isinstance(self.timestamps, np.ndarray):
-                raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
-            if len(self.timestamps) == 0:
-                raise ValueError("List argument 'timestamps' is empty.")
-            for t in self.timestamps:
-                if not (isinstance(t, np.int32) or isinstance(t, np.int64)):
-                    raise TypeError("Argument 'timestamps' should be a list or array of positive int.")
-                if t < 0:
-                    raise ValueError("Argument 'timestamps' should be a list or array of positive int.")
-                
-            if len(np.unique(self.timestamps)) != len(self.timestamps):
-                self.timestamps = np.unique(self.timestamps)
-                warn("Removed duplicates in argument 'timestamps'.")
-            
+        
+            self.timestamps = check_timestamps(self.timestamps)
+            self.nb_classifiers = len(self.timestamps)
             if self.sampling_ratio is not None:
                 warn("Both 'timestamps' and 'sampling_ratio' are defined, in that case" 
                      "argument 'sampling_ratio' is ignored")
@@ -114,17 +101,19 @@ class BaseTimeClassifier(ClassifierMixin, BaseEstimator, metaclass=ABCMeta):
     
     def predict(self, X, cost_matrices=None):
         """
-        Predict a dataset of time series of various lengths using the right classifier in the ChronologicalClassifiers
-        object. If a time series has a different number of measurements than the values in 'models_input_lengths', the
-        time series is truncated to the closest compatible length. If its length is shorter than the first length in
-        'models_input_lengths', the prior probabilities are used. Returns the most probable class of each series.
-        Parameters:
-            X: np.ndarray
-            Dataset of time series of various sizes to predict. An array of size (N*max_T) where N is the number of
-            time series, max_T the max number of measurements in a time series and where empty values are filled with
-            nan. Can also be a pandas DataFrame or a list of lists.
-        Returns:
-            np.ndarray containing the classifier predicted class for each time series in the dataset.
+        Predict class labels for samples in X.
+
+        Parameters
+        ----------
+            X : array-like, shape (n_samples, n_timestamps)
+                The input time series, potentially of various size.
+            cost_matrices : object
+                The input cost matrices, could be used for cost-sensitive learning.
+
+        Returns
+        -------
+            y : ndarray, shape (n_samples)
+                The labels for each sample the corresponding classifier has predict.
         """
         return self.predict_proba(X, cost_matrices).argmax(axis=-1)
     

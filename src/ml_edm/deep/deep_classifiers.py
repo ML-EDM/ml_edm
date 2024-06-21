@@ -10,14 +10,10 @@ from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
-from deep.deep_models import *
-from deep.modules import *
-
-import sys
-sys.path.append("..")
-
-from utils import *
-from trigger_models import TriggerModel
+from .deep_models import *
+from .modules import *
+from ..utils import *
+from ..trigger._base import BaseTriggerModel
 
 class EarlyStopping:
     def __init__(self, patience=5, min_delta=0):
@@ -37,7 +33,7 @@ class EarlyStopping:
             if self.counter >= self.patience:
                 self.early_stop = True
  
-class DeepChronologicalClassifier(TriggerModel):
+class DeepChronologicalClassifier():
 
     def __init__(self,
                  model,
@@ -197,6 +193,7 @@ class DeepChronologicalClassifier(TriggerModel):
         return self
     
     def predict(self, X):
+
         if self.model.embed_trigger_model:
             grouped_X = {}
             for serie in X:

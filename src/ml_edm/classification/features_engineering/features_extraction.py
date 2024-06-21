@@ -45,8 +45,8 @@ class Feature_extractor:
                 self.extractor.fit_transform(np.expand_dims(X, 1), y)
                 self.extractor = self.extractor.transform
         else:
-            warn(f"Time series provided are too short for {self.method},"
-                "using timestamps as features")
+            warn(f"Time series provided are too short, (length = {X.shape[1]}) for {self.method},"
+                 " using timestamps as features")
             self.extractor = self._do_nothing
 
         return self
