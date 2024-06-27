@@ -1,7 +1,6 @@
 import numpy as np
 from numbers import Number
-from warnings import warn 
-import matplotlib.pyplot as plt 
+from warnings import warn
 
 from .utils import check_timestamps
 
