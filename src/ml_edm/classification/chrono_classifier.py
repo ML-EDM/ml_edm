@@ -9,8 +9,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.calibration import CalibratedClassifierCV
 
 from .features_engineering.features_extraction import Feature_extractor
-from ..trigger import *
-from ..utils import *
+#from ..trigger import *
+#from ..utils import *
 
 from warnings import warn
 
