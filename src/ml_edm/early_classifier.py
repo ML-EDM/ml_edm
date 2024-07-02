@@ -9,7 +9,7 @@ from sklearn.base import BaseEstimator
 from sklearn.ensemble import HistGradientBoostingClassifier
 
 from .classification.chrono_classifier import ClassifiersCollection
-from .deep.deep_classifiers import DeepChronologicalClassifier
+#from .deep.deep_classifiers import DeepChronologicalClassifier
 from .cost_matrices import CostMatrices
 
 from .trigger._base import BaseTriggerModel
@@ -154,8 +154,8 @@ class EarlyClassifier(BaseEstimator):
         
         # FIT CLASSIFIERS
         if self.chronological_classifiers is not None:
-            if not isinstance(self.chronological_classifiers, ClassifiersCollection) and \
-                not isinstance(self.chronological_classifiers, DeepChronologicalClassifier):
+            if not isinstance(self.chronological_classifiers, ClassifiersCollection): #and \
+                #not isinstance(self.chronological_classifiers, DeepChronologicalClassifier):
                 raise ValueError(
                     "Argument 'chronological_classifiers' should be an instance of class 'ChronologicalClassifiers'.")
         else:
