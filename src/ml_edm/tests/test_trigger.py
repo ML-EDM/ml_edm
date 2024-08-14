@@ -1,15 +1,18 @@
 import numpy as np 
 
-from aeon.datasets import load_gunpoint, load_acsf1
+from aeon.datasets import load_gunpoint, load_acsf1, load_italy_power_demand
 from aeon.classification.convolution_based._rocket_classifier import MiniRocket
 
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import LabelEncoder, SplineTransformer
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.linear_model import RidgeClassifierCV
 
 from ml_edm.cost_matrices import CostMatrices
-from ml_edm.classification.chrono_classifier import ClassifiersCollection
-from ml_edm.trigger import CALIMERA
+from ml_edm.early_classifier import EarlyClassifier
+from ml_edm.classification.classifiers_collection import ClassifiersCollection
+from ml_edm.trigger import *
 
 
 def load_ts(n_classes):
@@ -39,21 +42,22 @@ def test_trigger(n_classes, trigger):
     data = load_ts(n_classes)
 
     X_clf, X_trigger, y_clf, y_trigger = train_test_split(
-        data['X_train'], data['y_train'], test_size=0.4, 
+        data['X_train'], data['y_train'], test_size=0.5, 
         random_state=44, stratify=data['y_train']
     )
-    X_clf, X_trigger, y_clf, y_trigger = (
-        data["X_train"], data["X_train"], 
-        data["y_train"], data["y_train"]
-    )
-
+    #X_clf, X_trigger, y_clf, y_trigger = (
+    #    data["X_train"], data["X_train"], 
+    #    data["y_train"], data["y_train"]
+    #)
+    #base_clf = make_pipeline(
+    #    SplineTransformer(), 
+    #    CalibratedClassifierCV(RidgeClassifierCV(), method="sigmoid")
+    #)
     chrono_clf = ClassifiersCollection(
-        base_classifier=RidgeClassifierCV(alphas=np.logspace(-3, 3, 10), 
-                                          scoring='accuracy'),
+        base_classifier=RidgeClassifierCV(), 
         sampling_ratio=0.05,
-        min_length=1,
-        feature_extraction={"method": "minirocket", 
-                            "params": {"random_state":42}}
+        min_length=1, 
+        feature_extraction={'method': 'minirocket', 'params': {'random_state': 44}}
     )
     chrono_clf.fit(X_clf, y_clf)
 
@@ -68,16 +72,21 @@ def test_trigger(n_classes, trigger):
     idx_min_class = classes[counts.argmin()]
     misclf_cost[:, idx_min_class] *= 100
 
-    cost_matrices = CostMatrices(chrono_clf.timestamps, n_classes, alpha=0.5, 
-                                 delay_cost=None, missclf_cost=None)
+    cost_matrices = CostMatrices(chrono_clf.timestamps, n_classes, alpha=0.8, 
+                                 delay_cost=delay_cost, misclf_cost=misclf_cost)
     
-    trigger.models_input_lengths = chrono_clf.timestamps
+    trigger.timestamps = chrono_clf.timestamps
 
+    ec = EarlyClassifier(
+        chrono_clf, trigger, cost_matrices, prefit_classifiers=True
+    )
+    ec.fit(X_trigger, y_trigger)
+
+    metrics = ec.score(data['X_test'], data['y_test'], return_metrics=True)
     X_probas = np.stack(chrono_clf.predict_past_proba(X_trigger))
-    trigger.fit(X_trigger, X_probas, y_trigger, cost_matrices)
+    
 
-
-
-
-trigger = CALIMERA(models_input_lengths=np.arange(100))
+#trigger = DeepQTrigger(timestamps=np.arange(100), past_probas=1, include_margin=False, 
+#                       savepath="../papers_experiments/ects_rl/models/")
+trigger = ProbabilityThreshold(timestamps=np.arange(100))
 test_trigger(2, trigger)

@@ -42,7 +42,7 @@ class CostMatrices:
                  timestamps,
                  n_classes,
                  all_matrices=None, 
-                 missclf_cost=None,
+                 misclf_cost=None,
                  delay_cost=None,
                  alpha=0.5):
         
@@ -56,19 +56,19 @@ class CostMatrices:
             self.missclf_cost = [self.values[i] - self.delay_cost[i] 
                                  for i in range(len(all_matrices))]
 
-            if (missclf_cost or delay_cost) is not None:
+            if (misclf_cost or delay_cost) is not None:
                 warn("When giving all costs matrices, every other parameters is ignored")
         else:
-            if isinstance(missclf_cost, np.ndarray):
-                missclf_matrix = missclf_cost
-            elif isinstance(missclf_cost, Number):
-                missclf_matrix = (np.zeros((n_classes, n_classes)) + missclf_cost) * (1-np.eye(n_classes))
-            elif missclf_cost is None:
-                warn("No missclassification cost defined, using default binary set up," 
+            if isinstance(misclf_cost, np.ndarray):
+                missclf_matrix = misclf_cost
+            elif isinstance(misclf_cost, Number):
+                missclf_matrix = (np.zeros((n_classes, n_classes)) + misclf_cost) * (1-np.eye(n_classes))
+            elif misclf_cost is None:
+                warn("No misclassification cost defined, using default binary set up," 
                     "bad classification cost =  1, 0 otherwise")
                 missclf_matrix = 1 - np.eye(n_classes)
             else:
-                raise ValueError("Missclassification cost should be defined"
+                raise ValueError("Misclassification cost should be defined"
                                 "as an numpy array or as a number")
             self.missclf_cost = [alpha * missclf_matrix for _ in range(len(self.timestamps))]
 

@@ -28,6 +28,7 @@ class BaseTriggerModel(BaseEstimator, metaclass=ABCMeta):
                 raise ValueError("y should be an array of classes of size N with N the number of examples in X_probas.")
 
         self.max_length = X.shape[1]
+        self.n_timestamps = X_probas.shape[1]
         self.ts = X
 
         self.classes_ = np.unique(y)

@@ -8,7 +8,7 @@ from sklearn.metrics import cohen_kappa_score
 from sklearn.base import BaseEstimator
 from sklearn.ensemble import HistGradientBoostingClassifier
 
-from .classification.chrono_classifier import ClassifiersCollection
+from .classification.classifiers_collection import ClassifiersCollection
 #from .deep.deep_classifiers import DeepChronologicalClassifier
 from .cost_matrices import CostMatrices
 
