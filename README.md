@@ -1,6 +1,21 @@
 ml_edm : A python package for Machine Learning for Early Decision Making tasks
 
 Repository: https://github.com/ML-EDM/ml_edm
+Resource paper: https://arxiv.org/abs/2408.12925 
+
+**&rarr; Please, quote this package as follows:**
+
+```
+@misc{mledmpackage,
+      title={ml_edm package: a Python toolkit for Machine Learning based Early Decision Making}, 
+      author={Aurélien Renault and Youssef Achenchabe and Édouard Bertrand and Alexis Bondu and Antoine Cornuéjols and Vincent Lemaire and Asma Dachraoui},
+      year={2024},
+      eprint={2408.12925},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2408.12925}, 
+}
+```
 
 Many situations require decisions to be made quickly to avoid the costs associated with delaying the decision. A doctor who needs to choose which test to perform on their patient and an agent considering whether a certain behavior on a network is caused by a hacker are examples of individuals confronted with such situations. However, taking a decision too hastily may lead to more mistakes, resulting in additional costs that could have been avoided. 
 
