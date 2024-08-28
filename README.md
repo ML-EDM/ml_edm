@@ -1,6 +1,7 @@
 ml_edm : A python package for Machine Learning for Early Decision Making tasks
 
 Repository: https://github.com/ML-EDM/ml_edm
+
 Resource paper: https://arxiv.org/abs/2408.12925 
 
 **&rarr; Please, quote this package as follows:**
