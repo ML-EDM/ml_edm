@@ -6,7 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "ml_edm"
 version = "0.0"
 authors = [
-  { name="Edouard BERTRAND", email="edouardbertrand100@gmail.com" },
+  { name="Aurélien RENAULT", email="aurelien.renault@outlook.fr" },
+  { name="Edouard BERTRAND", email="edouardbertrand100@gmail.com" }
 ]
 description = "Tools for Machine Learning for Early Decision Making"
 readme = "README.md"

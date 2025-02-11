@@ -85,6 +85,7 @@ class EconomyGamma(BaseTriggerModel):
                  nb_intervals=None,
                  aggregation_function='max',
                  split_k=None,
+                 random_state=44, 
                  n_jobs=1):
         
         super().__init__(timestamps)
@@ -92,7 +93,9 @@ class EconomyGamma(BaseTriggerModel):
         self.nb_intervals = nb_intervals
         self.aggregation_function = aggregation_function
         self.split_k = split_k
+        self.random_state = random_state
         self.n_jobs = n_jobs
+
 
         self.thresholds = None
         self.transition_matrices = None
@@ -235,7 +238,7 @@ class EconomyGamma(BaseTriggerModel):
         if self.split_k:
             if len(k_candidates) > 1:
                 idx_val, idx_meta = train_test_split(
-                    list(range(len(X_aggregated))), train_size=self.split_k, stratify=y, random_state=42
+                    list(range(len(X_aggregated))), train_size=self.split_k, stratify=y, random_state=self.random_state
                 )      
                 X_aggregated, X_aggregated_meta = X_aggregated[idx_val, :], X_aggregated[idx_meta, :]
                 #X_sorted, X_meta = X_sorted[:, idx_val], X_sorted[:, idx_meta]
