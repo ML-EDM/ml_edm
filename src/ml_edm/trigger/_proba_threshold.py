@@ -74,7 +74,7 @@ class ProbabilityThreshold(BaseTriggerModel):
 
         return self 
 
-    def _predict(self, X_probas, X_timestamp_idx):
+    def _predict(self, X_probas, X_timestamp):
 
         triggers = []
         for p in X_probas:

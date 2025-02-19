@@ -62,7 +62,7 @@ class ECEC(BaseTriggerModel):
         costs = []
         for i in range(len(X_pred)):
 
-            confidences = self._get_fused_confidence(X_pred[i])
+            confidences = self._get_fused_confidence(X_pred[i]) # replace by all confidences, already computed ?
             for j, c in enumerate(confidences):
                 if c >= threshold:
                     pred = X_pred[i][j]
