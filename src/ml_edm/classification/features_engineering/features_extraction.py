@@ -5,8 +5,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from aeon.classification.dictionary_based._weasel_v2 import WEASELTransformerV2
-from aeon.transformations.collection.tsfresh import TSFreshFeatureExtractor
-from aeon.transformations.collection.rocket import MiniRocket
+from aeon.transformations.collection.feature_based import TSFresh
+from aeon.transformations.collection.convolution_based import MiniRocket
 
 class Feature_extractor:
 
@@ -23,7 +23,7 @@ class Feature_extractor:
             self.min_length = 9
             self.extractor = MiniRocket(**self.kwargs)
         elif self.method == 'tsfresh':
-            self.extractor = TSFreshFeatureExtractor(**self.kwargs)
+            self.extractor = TSFresh(**self.kwargs)
         elif self.method == 'weasel2.0':
             self.min_length = 4
             self.extractor = WEASELTransformerV2(**self.kwargs)

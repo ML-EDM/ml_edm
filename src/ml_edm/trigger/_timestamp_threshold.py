@@ -61,5 +61,4 @@ class TimestampThreshold(BaseTriggerModel):
             triggers.append(
                 (i >= self.opt_threshold)
             )
-
         return np.array(triggers)

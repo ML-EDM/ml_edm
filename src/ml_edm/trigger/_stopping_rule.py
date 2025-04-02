@@ -1,5 +1,5 @@
 import numpy as np
-from itertools import permutations
+from itertools import product, permutations
 from scipy.stats import hmean
 from joblib import Parallel, delayed
 
@@ -71,7 +71,7 @@ class StoppingRule(BaseTriggerModel):
     def _fit(self, X_probas, y):
         
         nb_gammas = 3 if self.stopping_rule == "SR1" else X_probas.shape[2]+1
-        self.candidates_gammas = list(permutations(np.linspace(-1, 1, 11), nb_gammas))
+        self.candidates_gammas = list(product(np.linspace(-1, 1, 10), repeat=nb_gammas))
 
         gamma_costs = Parallel(n_jobs=self.n_jobs) \
                     (delayed(self._get_score)(gammas, X_probas, y) for gammas in self.candidates_gammas)

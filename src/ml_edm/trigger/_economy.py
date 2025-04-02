@@ -127,6 +127,16 @@ class EconomyGamma(BaseTriggerModel):
         # Obtain transition_matrices, Shape (T-1, K, K)
         transition_matrices = []
         for t in range(len(self.timestamps)-1):
+            trans_matrix = [
+                np.where(
+                    np.sum(X_intervals[t] == i) != 0, 
+                    np.divide(
+                        [np.sum((X_intervals[t+1] == j) & (X_intervals[t] == i)) for j in range(nb_intervals)],
+                        np.sum(X_intervals[t] == i), where=np.sum(X_intervals[t] == i) != 0), 
+                    1/nb_intervals) for i in range(nb_intervals)
+            ]
+            transition_matrices.append(np.array(trans_matrix))
+            """
             transition_matrices.append(
                 np.array(
                     [np.array([np.sum(
@@ -134,9 +144,7 @@ class EconomyGamma(BaseTriggerModel):
                         np.sum(X_intervals[t] == i) for i in range(nb_intervals)]
                 )
             )
-        # fix nans created by division by 0 when not enough data
-        transition_matrices = np.nan_to_num(transition_matrices, nan=1/nb_intervals)
-
+            """
         return transition_matrices
     
     def _get_costs(self, groups, timestamp, nb_intervals):

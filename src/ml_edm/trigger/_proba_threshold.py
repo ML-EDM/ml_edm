@@ -81,6 +81,5 @@ class ProbabilityThreshold(BaseTriggerModel):
             triggers.append(
                 (np.max(p) >= self.opt_threshold)
             )
-
         return np.array(triggers)
 
